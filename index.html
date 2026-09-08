@@ -1768,7 +1768,6 @@ function resolveOverlaps(newTrip, restrictToEvidenceOnly) {
 
 document.getElementById('entryForm').addEventListener('submit', async (e) => {
   e.preventDefault();
-  await pushUndo();
   const editId = document.getElementById('tripEditId').value;
   const country = document.getElementById('country').value;
   const region = mapCountryToRegion(country);
@@ -1779,6 +1778,15 @@ document.getElementById('entryForm').addEventListener('submit', async (e) => {
   const evidenceOnly = document.getElementById('evidenceOnly').checked;
   if (!entry || !exit) return;
   if (parseDate(exit) < parseDate(entry)) { alert('Exit date is before entry date.'); return; }
+  if (editId) {
+    const entryMs = parseDate(entry), exitMs = parseDate(exit);
+    const uncovered = expenses.filter(ex => ex.tripId === editId && ex.date && (parseDate(ex.date) < entryMs || parseDate(ex.date) > exitMs));
+    if (uncovered.length > 0) {
+      const proceed = confirm('This trip currently has ' + uncovered.length + ' bill(s) dated outside the new ' + entry + ' to ' + exit + ' range (e.g. ' + uncovered[0].vendor + ' on ' + uncovered[0].date + '). Those days would go back to showing as uncovered on the calendar. Save this change anyway?');
+      if (!proceed) return;
+    }
+  }
+  await pushUndo();
   let savedTrip;
   if (editId) {
     const idx = trips.findIndex(t => t.id === editId);
