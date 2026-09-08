@@ -1,0 +1,1990 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Travel day-count ledger</title>
+<style>
+  :root {
+    --ink: #1c2430; --ink-soft: #5b6472; --paper: #faf7f0; --paper-card: #ffffff;
+    --line: #d8d2c2; --line-strong: #b9b09a;
+    --amber: #b5720b; --amber-bg: #fbeed9;
+    --red: #a3312c; --red-bg: #f8e2e0;
+    --green: #2f6b3a; --green-bg: #e3ede4;
+    --alert: #a3187a; --alert-bg: #f5e0ee;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font-family: Georgia, "Iowan Old Style", serif; }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 28px 20px 60px; }
+  .masthead { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2px solid var(--ink); padding-bottom: 10px; margin-bottom: 22px; }
+  .masthead h1 { font-size: 22px; margin: 0; font-weight: normal; }
+  .masthead .sub { font-family: "Courier New", monospace; font-size: 11px; color: var(--ink-soft); text-align: right; }
+
+  .step { background: var(--paper-card); border: 1px solid var(--line-strong); border-radius: 4px; padding: 18px; margin-bottom: 18px; }
+  .step h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: var(--ink-soft); margin: 0 0 12px; font-weight: normal; font-family: "Courier New", monospace; }
+  .step p.hint { margin-top: 10px; margin-bottom: 0; }
+  .year-jump-btn {
+    font-family: "Courier New", monospace; font-size: 12px; padding: 5px 11px; margin-right: 6px;
+    border: 1px solid var(--line-strong); background: var(--paper); border-radius: 2px; cursor: pointer; color: var(--ink);
+  }
+  .year-jump-btn:hover { background: #f1ead9; }
+  .year-jump-btn.active { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+
+  .asof-row { display: flex; align-items: center; gap: 10px; font-family: "Courier New", monospace; font-size: 13px; flex-wrap: wrap; }
+  .asof-row input[type=date] { font-family: "Courier New", monospace; padding: 5px 8px; border: 1px solid var(--line-strong); background: var(--paper); border-radius: 2px; color: var(--ink); }
+  #lastSaved { color: var(--ink-soft); margin-left: auto; }
+
+  .backup-row, .close-row { display: flex; gap: 10px; align-items: end; flex-wrap: wrap; }
+  button.btn-primary, button.btn-secondary { font-family: "Courier New", monospace; font-size: 13px; padding: 9px 16px; border-radius: 3px; cursor: pointer; border: 1px solid var(--ink); }
+  .btn-primary { background: var(--ink); color: var(--paper); }
+  .btn-primary:hover { background: #333; }
+  .btn-secondary { background: var(--paper-card); color: var(--ink); border-color: var(--line-strong); }
+  .btn-secondary:hover { background: #f1ead9; }
+  .hint { font-family: "Courier New", monospace; font-size: 11px; color: var(--ink-soft); line-height: 1.6; }
+  #freshFileBanner { display: none; border-color: var(--red); }
+
+  .board { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+  .stub { background: var(--paper-card); border: 1px solid var(--line-strong); border-radius: 3px; padding: 14px 16px; position: relative; overflow: hidden; }
+  .stub::before { content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 4px; background: var(--stub-color, var(--ink-soft)); }
+  .stub h3 { margin: 0 0 2px; font-size: 14px; font-weight: normal; }
+  .stub .rule { font-family: "Courier New", monospace; font-size: 10px; color: var(--ink-soft); margin-bottom: 10px; }
+  .stub .num-row { display: flex; align-items: baseline; gap: 6px; margin-bottom: 6px; }
+  .stub .num { font-family: "Courier New", monospace; font-size: 26px; font-weight: bold; }
+  .stub .of { font-family: "Courier New", monospace; font-size: 13px; color: var(--ink-soft); }
+  .stub .bar-track { height: 6px; background: #eee6d6; border-radius: 3px; overflow: hidden; margin-bottom: 8px; }
+  .stub .bar-fill { height: 100%; border-radius: 3px; }
+  .stub .status { font-family: "Courier New", monospace; font-size: 11px; padding: 3px 7px; border-radius: 2px; display: inline-block; }
+  .status.ok { background: var(--green-bg); color: var(--green); }
+  .status.warn { background: var(--amber-bg); color: var(--amber); }
+  .status.over { background: var(--red-bg); color: var(--red); }
+  select.mini { font-family: "Courier New", monospace; font-size: 10px; margin-top: 8px; padding: 3px 4px; border: 1px solid var(--line-strong); background: var(--paper); border-radius: 2px; color: var(--ink); width: 100%; }
+
+  .cal-nav { display: flex; align-items: center; justify-content: center; gap: 18px; margin-bottom: 12px; font-family: "Courier New", monospace; }
+  .cal-nav button { font-family: "Courier New", monospace; font-size: 13px; padding: 4px 12px; border: 1px solid var(--line-strong); background: var(--paper); border-radius: 2px; cursor: pointer; }
+  .cal-nav button:hover { background: #f1ead9; }
+  .cal-month-label { font-size: 14px; min-width: 150px; text-align: center; }
+  .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+  .cal-dow { font-family: "Courier New", monospace; font-size: 9px; color: var(--ink-soft); text-align: center; text-transform: uppercase; padding-bottom: 4px; }
+  .cal-day { aspect-ratio: 1 / 0.85; border-radius: 2px; padding: 4px 5px; font-family: "Courier New", monospace; font-size: 10px; border: 1px solid var(--line); background: var(--paper); display: flex; flex-direction: column; justify-content: space-between; overflow: hidden; }
+  .cal-day.has-entry { cursor: pointer; }
+  .cal-day.has-entry:hover { outline: 2px solid var(--ink); outline-offset: -2px; }
+  tr.row-highlight { background: var(--amber-bg) !important; outline: 2px solid var(--amber); }
+  .cal-day.empty { border: none; background: transparent; }
+  .cal-day .dnum { font-size: 10px; color: var(--ink-soft); }
+  .cal-day .dcountry { font-size: 9px; line-height: 1.2; font-weight: bold; }
+  .cal-day.today { outline: 2px solid var(--ink); outline-offset: -2px; }
+  .cal-legend { display: flex; flex-wrap: wrap; gap: 8px 14px; margin-top: 12px; font-family: "Courier New", monospace; font-size: 10px; color: var(--ink-soft); }
+  .cal-legend .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; border: 1px solid var(--line-strong); }
+
+  form.entry { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; }
+  form.entry > div { flex: 1 1 150px; min-width: 140px; }
+  form.entry label { font-family: "Courier New", monospace; font-size: 10px; color: var(--ink-soft); display: block; margin-bottom: 4px; }
+  form.entry select, form.entry input { width: 100%; font-family: "Courier New", monospace; font-size: 13px; padding: 8px; border: 1px solid var(--line-strong); border-radius: 2px; background: var(--paper); color: var(--ink); }
+  form.entry button { font-family: "Courier New", monospace; font-size: 13px; padding: 9px 18px; border: 1px solid var(--ink); background: var(--ink); color: var(--paper); border-radius: 2px; cursor: pointer; white-space: nowrap; }
+  form.entry button:hover { background: #333; }
+  form.entry button.btn-secondary { background: var(--paper-card); color: var(--ink); border-color: var(--line-strong); }
+
+  table.ledger { width: 100%; border-collapse: collapse; font-family: "Courier New", monospace; font-size: 12px; }
+  table.ledger th { text-align: left; font-weight: normal; color: var(--ink-soft); font-size: 10px; text-transform: uppercase; border-bottom: 1px solid var(--ink); padding: 6px 8px; }
+  table.ledger td { padding: 8px; border-bottom: 1px solid var(--line); }
+  table.ledger tr:last-child td { border-bottom: none; }
+  .edit-btn, .del-btn { font-family: "Courier New", monospace; font-size: 11px; background: none; border: 1px solid var(--line-strong); border-radius: 2px; padding: 3px 9px; cursor: pointer; margin-right: 4px; }
+  .del-btn { color: var(--red); border-color: var(--red); }
+  .edit-btn:hover { background: #f1ead9; }
+  .del-btn:hover { background: var(--red-bg); }
+  .empty-row td { text-align: center; color: var(--ink-soft); padding: 20px; font-style: italic; }
+
+  .close-row select, .close-row input { font-family: "Courier New", monospace; font-size: 12px; padding: 7px; border: 1px solid var(--line-strong); border-radius: 2px; background: var(--paper); color: var(--ink); }
+  #printArea { display: none; }
+  #printArea.active { display: block; margin-top: 20px; background: var(--paper-card); border: 1px solid var(--line-strong); border-radius: 3px; padding: 20px; }
+  .print-header { border-bottom: 2px solid var(--ink); padding-bottom: 10px; margin-bottom: 14px; }
+  .print-header h2 { margin: 0 0 4px; font-size: 17px; font-weight: normal; }
+  .print-header .meta { font-family: "Courier New", monospace; font-size: 10.5px; color: var(--ink-soft); }
+  .print-note-box { font-family: "Courier New", monospace; font-size: 11px; background: var(--amber-bg); border: 1px solid var(--amber); border-radius: 2px; padding: 8px 10px; margin: 12px 0; }
+  .print-toolbar { position: fixed; bottom: 16px; right: 16px; display: flex; gap: 8px; z-index: 10; }
+  .print-toolbar button { font-family: "Courier New", monospace; font-size: 12px; padding: 9px 16px; border: 1px solid var(--ink); border-radius: 3px; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,0.15); }
+
+  .footer-note { font-family: "Courier New", monospace; font-size: 10.5px; color: var(--ink-soft); line-height: 1.6; margin-top: 20px; }
+
+  @media print {
+    .wrap > *:not(#printArea) { display: none !important; }
+    #printArea { display: block !important; border: none; padding: 0; }
+    .print-toolbar { display: none !important; }
+    body { background: #fff; }
+  }
+</style>
+</head>
+<body>
+
+<div id="loginScreen" style="max-width:420px; margin:80px auto; font-family:'Courier New',monospace; padding:0 20px;">
+  <h1 style="font-size:22px; margin-bottom:4px;">Travel day-count ledger</h1>
+  <p style="color:#5b6472; margin-top:0; margin-bottom:24px;">Sign in to continue &mdash; access is limited to the two accounts set up for this ledger.</p>
+  <form id="loginForm">
+    <div style="margin-bottom:12px;">
+      <label style="display:block; margin-bottom:4px;">Email</label>
+      <input type="email" id="loginEmail" required style="width:100%; padding:8px; border:1px solid #b9b09a; border-radius:2px; background:#faf7f0; font-family:inherit;">
+    </div>
+    <div style="margin-bottom:16px;">
+      <label style="display:block; margin-bottom:4px;">Password</label>
+      <input type="password" id="loginPassword" required style="width:100%; padding:8px; border:1px solid #b9b09a; border-radius:2px; background:#faf7f0; font-family:inherit;">
+    </div>
+    <button type="submit" style="width:100%; padding:10px; background:#1c2430; color:#fff; border:none; border-radius:2px; font-family:inherit; cursor:pointer;">Sign in</button>
+  </form>
+  <div id="loginStatus" style="margin-top:14px; color:#a3312c; font-size:13px;"></div>
+</div>
+
+<div id="appRoot" style="display:none;">
+<div class="wrap">
+
+  <div class="masthead">
+    <h1>Travel day-count ledger</h1>
+    <div class="sub">personal record &middot; day-count only<br>not a substitute for advice</div>
+    <div style="text-align:right; font-size:12px; margin-top:6px;">
+      Signed in as <strong id="currentUserEmail"></strong> &mdash; <button type="button" id="signOutBtn" style="font-family:inherit; font-size:12px; cursor:pointer; background:none; border:1px solid #b9b09a; border-radius:2px; padding:3px 8px;">Sign out</button>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="asof-row">
+      <span>counting as of</span>
+      <input type="date" id="asof">
+      <span id="loadstatus" style="color: var(--ink-soft);">loading&hellip;</span>
+      <span id="lastSaved"></span>
+    </div>
+    <div class="asof-row" style="margin-top:10px;">
+      <span>jump to year:</span>
+      <span id="yearJumpButtons"></span>
+      <input type="number" id="manualYearInput" placeholder="e.g. 2019" style="width:80px; font-family:'Courier New',monospace; padding:5px 8px; border:1px solid var(--line-strong); border-radius:2px; background:var(--paper); color:var(--ink);">
+      <button type="button" id="manualYearGoBtn" class="year-jump-btn">Go</button>
+    </div>
+    <p class="hint" style="margin-top:8px;">Jumping to a year moves <strong>both</strong> the cards below (to that
+      year's end) <strong>and</strong> the calendar (to January of that year) &mdash; so you land straight on the
+      right page for reviewing or adding that year's trips. Type any year not shown as a button, even ones with no
+      data yet.</p>
+    <div class="asof-row" style="margin-top:10px;">
+      <input type="checkbox" id="yearFilterToggle" style="width:auto;" checked>
+      <label for="yearFilterToggle" id="yearFilterLabel" style="margin:0; cursor:pointer;">Only show flights, trips, and bills from <strong>2026</strong> in the lists below (unticking shows every year at once)</label>
+    </div>
+  </div>
+
+  <div id="freshFileBanner" class="step">
+    <strong style="color: var(--red); font-family:'Courier New',monospace; font-size:12px;">This file has no data in it.</strong>
+    <p class="hint">If you already have a backup, click <strong>Load my data</strong> below right now, before adding anything.</p>
+  </div>
+
+  <div class="step">
+    <h2>Save / load your data</h2>
+    <div class="backup-row">
+      <button type="button" id="exportBtn" class="btn-primary">Save my data (download a file)</button>
+      <button type="button" id="importBtn" class="btn-secondary">Load my data (from a file)</button>
+      <input type="file" id="importFile" accept="application/json" style="display:none;">
+    </div>
+    <div id="backupStatus" class="hint" style="margin-top:8px;"></div>
+    <p class="hint">Click <strong>Save my data</strong> before you close this page. Whenever you open a new copy
+      of this tool, click <strong>Load my data</strong> first &mdash; that's the only step that carries your trips
+      and bills forward.</p>
+  </div>
+
+  <div class="step">
+    <h2>Undo</h2>
+    <div class="backup-row">
+      <button type="button" id="undoBtn" class="btn-secondary">Undo last change (0 available)</button>
+      <button type="button" id="redoBtn" class="btn-secondary">Redo (0 available)</button>
+    </div>
+    <div id="undoStatus" class="hint" style="margin-top:8px;"></div>
+    <p class="hint">Every add, edit, remove, or flight-log rebuild is remembered here &mdash; click Undo to step
+      back one change at a time, up to the last 20 actions. This is separate from your
+      downloaded backup file; it works even if you haven't saved one recently.</p>
+  </div>
+
+  <div class="step">
+    <h2>Your day counts</h2>
+    <div class="board" id="board"></div>
+  </div>
+
+  <div class="step">
+    <h2>Calendar</h2>
+    <div class="cal-nav">
+      <button type="button" id="calPrev">&larr;</button>
+      <div class="cal-month-label" id="calMonthLabel"></div>
+      <button type="button" id="calNext">&rarr;</button>
+    </div>
+    <div class="cal-grid" id="calGrid"></div>
+    <div class="cal-legend" id="calLegend"></div>
+  </div>
+
+  <div class="step">
+    <h2>Log a boarding pass</h2>
+    <p class="hint" style="margin-bottom:10px;">Departure date/city, then arrival date/city. No times, no
+      durations &mdash; if the exact landing date isn't printed on the pass, just use the departure date again.</p>
+    <form class="entry" id="legForm">
+      <input type="hidden" id="legEditId" value="">
+      <div>
+        <label>Departure date</label>
+        <input type="date" id="legDepDate" required>
+      </div>
+      <div>
+        <label>From (departed)</label>
+        <select id="legFrom"></select>
+      </div>
+      <div>
+        <label>Departure city (optional)</label>
+        <input type="text" id="legDepCity" placeholder="e.g. London Heathrow">
+      </div>
+      <div>
+        <label>To (arrived)</label>
+        <select id="legTo"></select>
+      </div>
+      <div>
+        <label>Arrival date (optional &mdash; defaults to departure date)</label>
+        <input type="date" id="legArrDate">
+      </div>
+      <div>
+        <label>Arrival city (optional)</label>
+        <input type="text" id="legArrCity" placeholder="e.g. San Diego">
+      </div>
+      <div>
+        <button type="submit" id="legSubmitBtn">Add flight</button>
+      </div>
+      <div>
+        <button type="button" id="legCancelBtn" class="btn-secondary" style="display:none;">Cancel edit</button>
+      </div>
+    </form>
+    <div id="legFormStatus" class="hint" style="margin-top:8px;"></div>
+
+    <table class="ledger" style="margin-top:14px;">
+      <thead><tr><th>Dep. date</th><th>From</th><th>Dep. city</th><th>To</th><th>Arr. date</th><th>Arr. city</th><th></th></tr></thead>
+      <tbody id="legBody"></tbody>
+    </table>
+
+    <div class="backup-row" style="margin-top:14px;">
+      <button type="button" id="buildTripsBtn" class="btn-secondary">Refresh calendar now</button>
+      <span id="buildStatus" class="hint"></span>
+    </div>
+    <p class="hint"><strong>The calendar updates automatically</strong> every time you add, edit, or remove a
+      flight above &mdash; you don't need to click anything else. This button is just a manual refresh, there in
+      case you ever want to force it. Chains your flights together by date: arriving somewhere starts the stay,
+      your next flight out ends it. Never touches anything you type into "Add a trip" below.</p>
+    <div id="legWarnings"></div>
+  </div>
+
+  <div class="step">
+    <h2>Add a trip directly (or fix one built from a flight)</h2>
+    <form class="entry" id="entryForm">
+      <input type="hidden" id="tripEditId" value="">
+      <div>
+        <label>Country</label>
+        <select id="country"></select>
+      </div>
+      <div>
+        <label>State / region (optional)</label>
+        <input type="text" id="state" placeholder="e.g. California">
+      </div>
+      <div>
+        <label>Entry date</label>
+        <input type="date" id="entryDate" required>
+      </div>
+      <div>
+        <label>Exit date</label>
+        <input type="date" id="exitDate" required>
+      </div>
+      <div>
+        <label>Notes (optional)</label>
+        <input type="text" id="note" placeholder="e.g. client visit, or the receipt's vendor name">
+      </div>
+      <div style="flex-basis:100%; display:flex; align-items:center; gap:8px; margin-top:2px;">
+        <input type="checkbox" id="evidenceOnly" style="width:auto;">
+        <label for="evidenceOnly" style="margin:0; cursor:pointer;">This trip is only backed by a receipt/bill (no boarding pass or hotel booking) &mdash; flag it on the calendar</label>
+      </div>
+      <div>
+        <button type="submit" id="tripSubmitBtn">Add trip</button>
+      </div>
+      <div>
+        <button type="button" id="tripCancelBtn" class="btn-secondary" style="display:none;">Cancel edit</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="step">
+    <h2>Still needs a boarding pass</h2>
+    <p class="hint">Every trip currently flagged as receipt-only, in one place &mdash; work through this list to
+      find and log the missing flights, rather than hunting through the full trip table below.</p>
+    <div id="needsPassList" style="margin-top:10px;"></div>
+  </div>
+
+  <div class="step">
+    <h2>Your trips</h2>
+    <button type="button" id="upgradeAllBtn" class="btn-primary" style="margin-bottom:8px;">Make bill-backed trips proper (one click, does everything)</button>
+    <p class="hint" style="margin-bottom:10px;">Carves precise trips out of hotel bookings, then upgrades any trip that already has at least
+      one bill attached (hotel, restaurant, taxi, anything) from receipt-only to fully confirmed \u2014 matching the idea that
+      a hotel booking plus bills is real evidence of being in a country, not just a boarding pass.</p>
+    <button type="button" id="backfillHotelBtn" class="btn-secondary" style="margin-bottom:8px;">Just tighten dates using hotel bookings (no upgrading)</button>
+    <p class="hint" style="margin-bottom:10px;">For any hotel bill sitting inside a wide receipt-only trip, this carves out a precise trip
+      matching the hotel's own check-in/check-out dates \u2014 one click, does the whole list at once. Only ever touches
+      receipt-only trips; never a confirmed flight-backed one.</p>
+    <div id="backfillStatus" class="hint" style="margin-bottom:12px;"></div>
+    <input type="text" id="tripSearch" placeholder="Filter by country, state, or notes&hellip;" style="width:100%; font-family:'Courier New',monospace; font-size:13px; padding:8px; border:1px solid var(--line-strong); border-radius:2px; background:var(--paper); color:var(--ink); margin-bottom:12px;">
+    <div id="dupWarnings"></div>
+    <table class="ledger">
+      <thead><tr><th>Country</th><th>State</th><th>Entry</th><th>Exit</th><th>Days</th><th>Notes</th><th></th></tr></thead>
+      <tbody id="tripBody"></tbody>
+    </table>
+  </div>
+
+  <div class="step">
+    <h2>Log a receipt or bill</h2>
+    <form class="entry" id="expenseForm">
+      <input type="hidden" id="expEditId" value="">
+      <div>
+        <label>Which trip</label>
+        <select id="expTrip"></select>
+      </div>
+      <div id="expNewTripWrap" style="display:none; flex-basis:100%; gap:10px; flex-wrap:wrap;">
+        <div style="flex:1; min-width:160px;">
+          <label>New trip \u2014 country</label>
+          <select id="expNewTripCountry"></select>
+        </div>
+        <div style="flex:1; min-width:130px;">
+          <label>New trip \u2014 entry date</label>
+          <input type="date" id="expNewTripEntry">
+        </div>
+        <div style="flex:1; min-width:130px;">
+          <label>New trip \u2014 exit date</label>
+          <input type="date" id="expNewTripExit">
+        </div>
+        <p class="hint" style="flex-basis:100%; margin:2px 0 0;">A hotel booking (or any bill) is enough on its own to justify a trip \u2014 this creates it automatically, flagged as receipt-only, and attaches this bill to it in one step.</p>
+      </div>
+      <div>
+        <label>Type</label>
+        <select id="expCategory">
+          <option value="Hotel">Hotel</option>
+          <option value="Restaurant">Restaurant</option>
+          <option value="Taxi">Taxi / Car</option>
+          <option value="Train">Train</option>
+          <option value="Shopping">Shopping / clothes</option>
+          <option value="Groceries">Groceries</option>
+          <option value="Medical">Medical / dentist</option>
+          <option value="Entertainment">Entertainment / activities</option>
+          <option value="Fuel">Fuel / car rental</option>
+          <option value="Other">Other</option>
+        </select>
+      </div>
+      <div>
+        <label>Vendor / name</label>
+        <input type="text" id="expVendor" placeholder="e.g. Marriott Milan">
+      </div>
+      <div id="expFromWrap" style="display:none;">
+        <label>From</label>
+        <input type="text" id="expFrom" placeholder="e.g. Boston">
+      </div>
+      <div id="expToWrap" style="display:none;">
+        <label>To</label>
+        <input type="text" id="expTo" placeholder="e.g. New York">
+      </div>
+      <div>
+        <label>Date</label>
+        <input type="date" id="expDate">
+      </div>
+      <div id="expEndDateWrap" style="display:none;">
+        <label>Check-out</label>
+        <input type="date" id="expEndDate">
+      </div>
+      <div>
+        <label>Amount</label>
+        <input type="number" id="expAmount" step="0.01" min="0" placeholder="0.00">
+      </div>
+      <div>
+        <label>Currency</label>
+        <input type="text" id="expCurrency" list="currencyList" placeholder="GBP" maxlength="6">
+        <datalist id="currencyList">
+          <option value="GBP"><option value="USD"><option value="EUR"><option value="AED">
+          <option value="CHF"><option value="AUD"><option value="JPY"><option value="SGD">
+          <option value="CAD"><option value="NZD"><option value="HKD"><option value="CNY">
+          <option value="INR"><option value="SEK"><option value="NOK"><option value="DKK">
+          <option value="ZAR"><option value="MXN"><option value="BRL"><option value="KRW">
+          <option value="THB"><option value="MYR"><option value="IDR"><option value="PHP">
+          <option value="VND"><option value="TRY"><option value="SAR"><option value="QAR"><option value="KWD">
+        </datalist>
+      </div>
+      <div id="expUaeResidenceWrap" style="display:none; flex-basis:100%; align-items:center; gap:8px; margin-top:2px;">
+        <input type="checkbox" id="expUaeResidence" style="width:auto;">
+        <label for="expUaeResidence" style="margin:0; cursor:pointer;">Tied to my UAE residence/company (e.g. home address, company office) &mdash; strengthens actual-presence evidence for the UAE route</label>
+      </div>
+      <div>
+        <button type="submit" id="expSubmitBtn">Add bill</button>
+      </div>
+      <div>
+        <button type="button" id="expCancelBtn" class="btn-secondary" style="display:none;">Cancel edit</button>
+      </div>
+    </form>
+    <div id="expFormStatus" class="hint" style="margin-top:8px;"></div>
+
+    <input type="text" id="expSearch" placeholder="Filter by trip, type, or vendor&hellip;" style="width:100%; font-family:'Courier New',monospace; font-size:13px; padding:8px; border:1px solid var(--line-strong); border-radius:2px; background:var(--paper); color:var(--ink); margin:14px 0 12px;">
+    <table class="ledger">
+      <thead><tr><th>Trip</th><th>Type</th><th>Vendor</th><th>Date</th><th>Amount</th><th></th></tr></thead>
+      <tbody id="expenseBody"></tbody>
+    </table>
+  </div>
+
+  <div class="step">
+    <h2>Close out a year &amp; print</h2>
+    <div class="close-row">
+      <div>
+        <label class="hint" style="display:block;">Year</label>
+        <select id="closeYear"></select>
+      </div>
+      <div style="flex:1; min-width:200px;">
+        <label class="hint" style="display:block;">Note (optional)</label>
+        <input type="text" id="closeNote" placeholder="e.g. 14 trips logged" style="width:100%;">
+      </div>
+      <button type="button" id="prepareBtn" class="btn-primary">Prepare summary</button>
+    </div>
+    <p class="hint" style="margin-top:10px;">Builds a printable one-page summary. Review it, then press
+      <strong>Ctrl+P</strong> (Cmd+P on Mac) to print or save as PDF.</p>
+  </div>
+
+  <div id="printArea"></div>
+
+  <p class="footer-note">
+    Days count as present if he was there for any part of the day, including entry and exit day. The UK test also
+    depends on ties and the midnight rule &mdash; treat the UK number as a close approximation, not a final answer.
+    Bill amounts are recorded exactly as entered in whatever currency you type, with no conversion. Your data is
+    saved live to your private Firebase project, accessible only to the two signed-in accounts set up for it.
+  </p>
+
+</div>
+
+<div class="print-toolbar" id="printToolbar" style="display:none;">
+  <button type="button" id="printNowBtn" class="btn-primary">Print now</button>
+  <button type="button" id="closePreviewBtn" class="btn-secondary">Close preview</button>
+</div>
+
+</div>
+
+<script type="module">
+// ===================================================================
+// PASTE YOUR OWN FIREBASE CONFIG HERE (from Firebase Console > Project
+// settings > Your apps > the </> web app you registered).
+// ===================================================================
+const firebaseConfig = {
+  apiKey: "AIzaSyA7inayuocwxSBVpDaDPvqJushjq7cP6es",
+  authDomain: "travel-ledger-b0084.firebaseapp.com",
+  projectId: "travel-ledger-b0084",
+  storageBucket: "travel-ledger-b0084.firebasestorage.app",
+  messagingSenderId: "680006158616",
+  appId: "1:680006158616:web:b1c5fd44bf248c7a62766d"
+};
+
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import { getFirestore, doc, getDoc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+const fbApp = initializeApp(firebaseConfig);
+const auth = getAuth(fbApp);
+const db = getFirestore(fbApp);
+window.__fb = { auth, db, doc, getDoc, setDoc, onSnapshot, signOut };
+
+document.getElementById('loginForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const statusEl = document.getElementById('loginStatus');
+  statusEl.textContent = 'Signing in\u2026';
+  statusEl.style.color = '#5b6472';
+  try {
+    await signInWithEmailAndPassword(auth, document.getElementById('loginEmail').value, document.getElementById('loginPassword').value);
+  } catch (err) {
+    statusEl.textContent = 'Could not sign in \u2014 check the email and password and try again.';
+    statusEl.style.color = '#a3312c';
+  }
+});
+document.getElementById('signOutBtn').addEventListener('click', () => signOut(auth));
+
+onAuthStateChanged(auth, (user) => {
+  if (user) {
+    document.getElementById('loginScreen').style.display = 'none';
+    document.getElementById('appRoot').style.display = 'block';
+    document.getElementById('currentUserEmail').textContent = user.email;
+    window.__ledgerSignedInFlag = true;
+    window.dispatchEvent(new CustomEvent('ledger-signed-in'));
+  } else {
+    document.getElementById('loginScreen').style.display = 'block';
+    document.getElementById('appRoot').style.display = 'none';
+  }
+});
+</script>
+
+<script>
+window.addEventListener('error', function (e) {
+  const banner = document.createElement('div');
+  banner.style.cssText = 'position:fixed; top:0; left:0; right:0; background:#a3312c; color:#fff; padding:10px 16px; font-family:monospace; font-size:12px; z-index:9999;';
+  banner.textContent = 'Page error (please screenshot this): ' + e.message + ' at line ' + e.lineno;
+  document.body.prepend(banner);
+});
+
+// ================= state =================
+let trips = [];
+let legs = [];
+let expenses = [];
+let storageOk = true;
+let storageMode = 'none';
+let ukThresh = 16;
+let uaeThresh = 90;
+let calYear = new Date().getUTCFullYear();
+let calMonth = new Date().getUTCMonth();
+let undoStack = [];
+let redoStack = [];
+const UNDO_LIMIT = 20;
+
+// ================= date helpers =================
+function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
+function parseDate(s) { if (!s || typeof s !== 'string') return 0; const [y, m, d] = s.split('-').map(Number); return Date.UTC(y, m - 1, d); }
+function fmt(ms) { return new Date(ms).toISOString().slice(0, 10); }
+function daysInclusive(a, b) { return Math.round((parseDate(b) - parseDate(a)) / 86400000) + 1; }
+function overlapDays(entryStr, exitStr, rangeStartMs, rangeEndMs) {
+  const s = parseDate(entryStr), e = parseDate(exitStr);
+  const os = Math.max(s, rangeStartMs), oe = Math.min(e, rangeEndMs);
+  if (os > oe) return 0;
+  return Math.round((oe - os) / 86400000) + 1;
+}
+function ukTaxYearRange(asofMs) {
+  const d = new Date(asofMs);
+  const y = d.getUTCFullYear(), m = d.getUTCMonth(), day = d.getUTCDate();
+  const startYear = (m > 3 || (m === 3 && day >= 6)) ? y : y - 1;
+  return { start: Date.UTC(startYear, 3, 6), end: Date.UTC(startYear + 1, 3, 5), label: startYear + '/' + String(startYear + 1).slice(2) };
+}
+
+// ================= country / region =================
+const SCHENGEN_COUNTRIES = new Set([
+  'Austria','Belgium','Bulgaria','Croatia','Czechia','Denmark','Estonia','Finland','France','Germany',
+  'Greece','Hungary','Iceland','Italy','Latvia','Liechtenstein','Lithuania','Luxembourg','Malta','Netherlands',
+  'Norway','Poland','Portugal','Romania','Slovakia','Slovenia','Spain','Sweden','Switzerland'
+]);
+const REGION_OVERRIDE = { 'United Kingdom': 'UK', 'United States': 'US', 'United Arab Emirates': 'UAE', 'Cyprus': 'Cyprus' };
+function mapCountryToRegion(name) {
+  if (REGION_OVERRIDE[name]) return REGION_OVERRIDE[name];
+  if (SCHENGEN_COUNTRIES.has(name)) return 'Schengen';
+  return 'Other';
+}
+const WORLD_COUNTRIES = [
+  'Afghanistan','Albania','Algeria','Andorra','Angola','Antigua and Barbuda','Argentina','Armenia','Aruba','Australia',
+  'Austria','Azerbaijan','Bahamas','Bahrain','Bangladesh','Barbados','Belarus','Belgium','Belize','Benin','Bhutan',
+  'Bolivia','Bosnia and Herzegovina','Botswana','Brazil','Brunei','Bulgaria','Burkina Faso','Burundi','Cabo Verde',
+  'Cambodia','Cameroon','Canada','Central African Republic','Chad','Chile','China','Colombia','Comoros',
+  'Congo (Republic of the)','Congo (DRC)','Costa Rica','Croatia','Cuba','Cyprus','Czechia','Denmark','Djibouti',
+  'Dominica','Dominican Republic','Ecuador','Egypt','El Salvador','Equatorial Guinea','Eritrea','Estonia',
+  'Eswatini','Ethiopia','Fiji','Finland','France','Gabon','Gambia','Georgia','Germany','Ghana','Greece','Grenada',
+  'Guatemala','Guinea','Guinea-Bissau','Guyana','Haiti','Honduras','Hungary','Iceland','India','Indonesia','Iran',
+  'Iraq','Ireland','Israel','Italy','Ivory Coast','Jamaica','Japan','Jordan','Kazakhstan','Kenya','Kiribati',
+  'Kosovo','Kuwait','Kyrgyzstan','Laos','Latvia','Lebanon','Lesotho','Liberia','Libya','Liechtenstein','Lithuania',
+  'Luxembourg','Madagascar','Malawi','Malaysia','Maldives','Mali','Malta','Marshall Islands','Mauritania',
+  'Mauritius','Mexico','Micronesia','Moldova','Monaco','Mongolia','Montenegro','Morocco','Mozambique','Myanmar',
+  'Namibia','Nauru','Nepal','Netherlands','New Zealand','Nicaragua','Niger','Nigeria','North Korea',
+  'North Macedonia','Norway','Oman','Pakistan','Palau','Palestine','Panama','Papua New Guinea','Paraguay','Peru',
+  'Philippines','Poland','Portugal','Qatar','Romania','Russia','Rwanda','Saint Kitts and Nevis','Saint Lucia',
+  'Saint Vincent and the Grenadines','Samoa','San Marino','Sao Tome and Principe','Saudi Arabia','Senegal',
+  'Serbia','Seychelles','Sierra Leone','Singapore','Slovakia','Slovenia','Solomon Islands','Somalia',
+  'South Africa','South Korea','South Sudan','Spain','Sri Lanka','Sudan','Suriname','Sweden','Switzerland',
+  'Syria','Taiwan','Tajikistan','Tanzania','Thailand','Timor-Leste','Togo','Tonga','Trinidad and Tobago',
+  'Tunisia','Turkey','Turkmenistan','Tuvalu','Uganda','Ukraine','United Arab Emirates','United Kingdom',
+  'United States','Uruguay','Uzbekistan','Vanuatu','Vatican City','Venezuela','Vietnam','Yemen','Zambia','Zimbabwe'
+];
+function populateCountrySelects() {
+  const opts = WORLD_COUNTRIES.map(c => '<option value="' + c + '">' + c + (SCHENGEN_COUNTRIES.has(c) ? ' (Schengen)' : '') + '</option>').join('');
+  const plain = WORLD_COUNTRIES.map(c => '<option value="' + c + '">' + c + '</option>').join('');
+  document.getElementById('country').innerHTML = opts;
+  document.getElementById('country').value = 'United Kingdom';
+  document.getElementById('legFrom').innerHTML = plain;
+  document.getElementById('legFrom').value = 'United Arab Emirates';
+  document.getElementById('legTo').innerHTML = plain;
+  document.getElementById('legTo').value = 'United Kingdom';
+  document.getElementById('expNewTripCountry').innerHTML = opts;
+  document.getElementById('expNewTripCountry').value = 'United Arab Emirates';
+}
+
+// ================= storage (Firestore) =================
+const SHARED_DOC_PATH = ['ledgerData', 'shared'];
+let firestoreCache = null;
+let suppressNextSnapshotReload = false;
+
+async function getFirestoreDoc() {
+  const { db, doc, getDoc } = window.__fb;
+  const snap = await getDoc(doc(db, ...SHARED_DOC_PATH));
+  return snap.exists() ? snap.data() : {};
+}
+
+async function storageGetRaw(key) {
+  try {
+    if (!firestoreCache) firestoreCache = await getFirestoreDoc();
+    storageMode = 'firebase';
+    return firestoreCache[key] != null ? firestoreCache[key] : null;
+  } catch (e) { storageMode = 'none'; return null; }
+}
+async function storageSetRaw(key, value) {
+  try {
+    const { db, doc, setDoc } = window.__fb;
+    if (!firestoreCache) firestoreCache = await getFirestoreDoc();
+    firestoreCache[key] = value;
+    suppressNextSnapshotReload = true;
+    await setDoc(doc(db, ...SHARED_DOC_PATH), { [key]: value }, { merge: true });
+    storageMode = 'firebase';
+    return true;
+  } catch (e) { storageMode = 'none'; return false; }
+}
+
+function startLiveSync() {
+  const { db, doc, onSnapshot } = window.__fb;
+  onSnapshot(doc(db, ...SHARED_DOC_PATH), (snap) => {
+    if (suppressNextSnapshotReload) { suppressNextSnapshotReload = false; return; }
+    if (!snap.exists()) return;
+    firestoreCache = snap.data();
+    loadAll().then(() => {
+      renderAll();
+      populateCloseYearSelect();
+      updateUndoButton();
+      updateRedoButton();
+      updateYearFilterLabel();
+      document.getElementById('loadstatus').textContent = 'live \u2014 updated just now (Firebase)';
+    });
+  });
+}
+function touchLastSaved() {
+  const el = document.getElementById('lastSaved');
+  if (el) el.textContent = 'last saved ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+async function loadAll() {
+  try { const v = await storageGetRaw('trips-list'); trips = v ? JSON.parse(v) : []; } catch (e) { trips = []; }
+  try {
+    const v = await storageGetRaw('legs-list');
+    legs = v ? JSON.parse(v) : [];
+    // Migrate legs saved under an older schema (single "date"/"note" fields)
+    // to the current depDate/arrDate/depCity/arrCity structure.
+    legs = legs.map(l => ({
+      id: l.id || uid(),
+      depDate: l.depDate || l.date || '',
+      from: l.from || '',
+      depCity: l.depCity || '',
+      to: l.to || '',
+      arrDate: l.arrDate || l.date || l.depDate || '',
+      arrCity: l.arrCity || l.note || ''
+    })).filter(l => l.depDate && l.arrDate && l.from && l.to);
+    await saveLegs();
+  } catch (e) { legs = []; }
+  try { const v = await storageGetRaw('expenses-list'); expenses = v ? JSON.parse(v) : []; } catch (e) { expenses = []; }
+  try { const t = await storageGetRaw('uk-threshold'); if (t) ukThresh = Number(t); } catch (e) {}
+  try { const t = await storageGetRaw('uae-threshold'); if (t) uaeThresh = Number(t); } catch (e) {}
+  try { const v = await storageGetRaw('undo-stack'); undoStack = v ? JSON.parse(v) : []; } catch (e) { undoStack = []; }
+  try { const v = await storageGetRaw('redo-stack'); redoStack = v ? JSON.parse(v) : []; } catch (e) { redoStack = []; }
+}
+
+function snapshotState() {
+  return JSON.stringify({ trips, legs, expenses, ukThresh, uaeThresh });
+}
+async function persistUndoRedo() {
+  try { await storageSetRaw('undo-stack', JSON.stringify(undoStack)); } catch (e) {}
+  try { await storageSetRaw('redo-stack', JSON.stringify(redoStack)); } catch (e) {}
+}
+async function pushUndo() {
+  undoStack.push(snapshotState());
+  if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+  redoStack = []; // a genuine new action invalidates any redo history
+  await persistUndoRedo();
+  updateUndoButton();
+  updateRedoButton();
+}
+async function performUndo() {
+  const statusEl = document.getElementById('undoStatus');
+  if (undoStack.length === 0) {
+    if (statusEl) { statusEl.textContent = 'Nothing left to undo.'; statusEl.style.color = 'var(--ink-soft)'; }
+    return;
+  }
+  redoStack.push(snapshotState());
+  if (redoStack.length > UNDO_LIMIT) redoStack.shift();
+  const prev = JSON.parse(undoStack.pop());
+  trips = prev.trips; legs = prev.legs; expenses = prev.expenses;
+  ukThresh = prev.ukThresh; uaeThresh = prev.uaeThresh;
+  await Promise.all([saveTrips(), saveLegs(), saveExpenses(), saveUkThresh(ukThresh), saveUaeThresh(uaeThresh)]);
+  await persistUndoRedo();
+  renderAll();
+  populateCloseYearSelect();
+  updateUndoButton();
+  updateRedoButton();
+  if (statusEl) { statusEl.textContent = '\u2713 Undone \u2014 ' + undoStack.length + ' step(s) still available. (' + redoStack.length + ' redo available)'; statusEl.style.color = 'var(--green)'; }
+}
+async function performRedo() {
+  const statusEl = document.getElementById('undoStatus');
+  if (redoStack.length === 0) {
+    if (statusEl) { statusEl.textContent = 'Nothing left to redo.'; statusEl.style.color = 'var(--ink-soft)'; }
+    return;
+  }
+  undoStack.push(snapshotState());
+  if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+  const next = JSON.parse(redoStack.pop());
+  trips = next.trips; legs = next.legs; expenses = next.expenses;
+  ukThresh = next.ukThresh; uaeThresh = next.uaeThresh;
+  await Promise.all([saveTrips(), saveLegs(), saveExpenses(), saveUkThresh(ukThresh), saveUaeThresh(uaeThresh)]);
+  await persistUndoRedo();
+  renderAll();
+  populateCloseYearSelect();
+  updateUndoButton();
+  updateRedoButton();
+  if (statusEl) { statusEl.textContent = '\u2713 Redone \u2014 ' + redoStack.length + ' step(s) still available to redo.'; statusEl.style.color = 'var(--green)'; }
+}
+function updateUndoButton() {
+  const btn = document.getElementById('undoBtn');
+  if (!btn) return;
+  btn.textContent = 'Undo last change (' + undoStack.length + ' available)';
+  btn.disabled = undoStack.length === 0;
+}
+function updateRedoButton() {
+  const btn = document.getElementById('redoBtn');
+  if (!btn) return;
+  btn.textContent = 'Redo (' + redoStack.length + ' available)';
+  btn.disabled = redoStack.length === 0;
+}
+async function saveTrips() { storageOk = await storageSetRaw('trips-list', JSON.stringify(trips)); touchLastSaved(); }
+async function saveLegs() { storageOk = await storageSetRaw('legs-list', JSON.stringify(legs)); touchLastSaved(); }
+async function saveExpenses() { storageOk = await storageSetRaw('expenses-list', JSON.stringify(expenses)); touchLastSaved(); }
+async function saveUkThresh(v) { ukThresh = Number(v); await storageSetRaw('uk-threshold', String(ukThresh)); }
+async function saveUaeThresh(v) { uaeThresh = Number(v); await storageSetRaw('uae-threshold', String(uaeThresh)); }
+
+function exportBackup() {
+  const payload = { exportedAt: new Date().toISOString(), trips, legs, expenses, ukThresh, uaeThresh };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'travel-ledger-backup-' + new Date().toISOString().slice(0, 10) + '.json';
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
+async function importBackupFile(file) {
+  const text = await file.text();
+  let data;
+  try { data = JSON.parse(text); } catch (e) {
+    document.getElementById('backupStatus').textContent = 'Could not read that file \u2014 is it a backup .json from this ledger?';
+    return;
+  }
+  trips = Array.isArray(data.trips) ? data.trips : [];
+  legs = Array.isArray(data.legs) ? data.legs : [];
+  expenses = Array.isArray(data.expenses) ? data.expenses : [];
+  ukThresh = data.ukThresh || 16;
+  uaeThresh = data.uaeThresh || 90;
+  await saveTrips(); await saveLegs(); await saveExpenses();
+  await saveUkThresh(ukThresh); await saveUaeThresh(uaeThresh);
+  renderAll(); populateCloseYearSelect();
+  document.getElementById('freshFileBanner').style.display = 'none';
+  document.getElementById('backupStatus').textContent = 'Loaded ' + trips.length + ' trip(s), ' + legs.length + ' flight(s), ' + expenses.length + ' bill(s) from backup dated ' + (data.exportedAt || 'unknown') + '.';
+}
+
+// ================= dashboard =================
+const REGION_COLORS = {
+  UK:      { bg: '#e3ede4', border: '#2f6b3a', text: '#2f6b3a' },
+  US:      { bg: '#e2e8f5', border: '#33499e', text: '#33499e' },
+  Schengen:{ bg: '#dcf0ee', border: '#0e7c74', text: '#0e7c74' },
+  UAE:     { bg: '#f8e2e0', border: '#a3312c', text: '#a3312c' },
+  Cyprus:  { bg: '#f0e2f5', border: '#7a3a9e', text: '#7a3a9e' },
+  Other:   { bg: '#eee', border: '#888', text: '#5b6472' }
+};
+function computeStats(asof) {
+  const stats = [];
+  const schStart = asof - 179 * 86400000;
+  let schDays = 0;
+  trips.filter(t => t.region === 'Schengen').forEach(t => { schDays += overlapDays(t.entry, t.exit, schStart, asof); });
+  stats.push({ title: 'Schengen area', ruleLabel: '90 days in any rolling 180', used: schDays, threshold: 90,
+    statusClass: schDays >= 90 ? 'over' : schDays >= 75 ? 'warn' : 'ok', direction: 'atMost',
+    note: 'window: ' + fmt(schStart) + ' to ' + fmt(asof) });
+
+  const ukTY = ukTaxYearRange(asof);
+  let ukDays = 0;
+  trips.filter(t => t.region === 'UK').forEach(t => { ukDays += overlapDays(t.entry, t.exit, ukTY.start, ukTY.end); });
+  stats.push({ title: 'United Kingdom', ruleLabel: 'UK tax year ' + ukTY.label + ', ' + ukThresh + '-day test',
+    used: ukDays, threshold: ukThresh, direction: 'atMost',
+    statusClass: ukDays >= ukThresh ? 'over' : ukDays >= ukThresh * 0.75 ? 'warn' : 'ok', note: '' });
+
+  const asofDate = new Date(asof);
+  const curYear = asofDate.getUTCFullYear();
+  const yearDays = (yr) => {
+    const ys = Date.UTC(yr, 0, 1), ye = Date.UTC(yr, 11, 31);
+    let d = 0;
+    trips.filter(t => t.region === 'US').forEach(t => { d += overlapDays(t.entry, t.exit, ys, Math.min(ye, asof)); });
+    return d;
+  };
+  const curD = yearDays(curYear), prevD = yearDays(curYear - 1), prev2D = yearDays(curYear - 2);
+  const weighted = Math.round(curD + prevD / 3 + prev2D / 6);
+  stats.push({ title: 'United States', ruleLabel: 'weighted 3yr total, current yr ' + curD + ' days', used: weighted, threshold: 183,
+    direction: 'atMost', statusClass: weighted >= 183 ? 'over' : weighted >= 150 ? 'warn' : 'ok',
+    note: curYear + ': ' + curD + '  +  ' + (curYear - 1) + '/3: ' + Math.round(prevD / 3) + '  +  ' + (curYear - 2) + '/6: ' + Math.round(prev2D / 6) });
+
+  const uaeStart = asof - 364 * 86400000;
+  let uaeDays = 0;
+  trips.filter(t => t.region === 'UAE').forEach(t => { uaeDays += overlapDays(t.entry, t.exit, uaeStart, asof); });
+  const uaeStatus = uaeDays >= uaeThresh ? 'ok' : uaeDays >= uaeThresh - 30 ? 'warn' : 'over';
+  stats.push({ title: 'UAE', ruleLabel: uaeThresh + '-day route in rolling 12 months', used: uaeDays, threshold: uaeThresh,
+    statusClass: uaeStatus, direction: 'atLeast',
+    note: uaeThresh === 90 ? '90-day route: permit + home + business' : '183-day route: physical presence, treaty-grade' });
+
+  const italyYearStart = Date.UTC(new Date(asof).getUTCFullYear(), 0, 1);
+  const italyYearEnd = Date.UTC(new Date(asof).getUTCFullYear(), 11, 31);
+  let italyDays = 0;
+  trips.filter(t => t.country === 'Italy').forEach(t => { italyDays += overlapDays(t.entry, t.exit, italyYearStart, Math.min(italyYearEnd, asof)); });
+  stats.push({ title: 'Italy', ruleLabel: '183 days per calendar year (Italy\u2019s own residency test)', used: italyDays, threshold: 183,
+    direction: 'atMost', statusClass: italyDays >= 183 ? 'over' : italyDays >= 150 ? 'warn' : 'ok',
+    note: 'Separate from the Schengen 90/180 pool above \u2014 this is Italy\u2019s own domestic threshold, based on time in Italy specifically.' });
+
+  const cyYearStart = Date.UTC(new Date(asof).getUTCFullYear(), 0, 1);
+  const cyYearEnd = Date.UTC(new Date(asof).getUTCFullYear(), 11, 31);
+  let cyprusDays = 0;
+  trips.filter(t => t.region === 'Cyprus').forEach(t => { cyprusDays += overlapDays(t.entry, t.exit, cyYearStart, Math.min(cyYearEnd, asof)); });
+  stats.push({ title: 'Cyprus', ruleLabel: '183 days per calendar year (Cyprus\u2019s own residency test)', used: cyprusDays, threshold: 183,
+    direction: 'atMost', statusClass: cyprusDays >= 183 ? 'over' : cyprusDays >= 150 ? 'warn' : 'ok',
+    note: 'Cyprus is outside Schengen and outside the UAE/UK/US tests \u2014 this is its own separate domestic threshold. Note: Cyprus also offers a 60-day route for people who aren\u2019t tax-resident anywhere else and have ties there (business/property) \u2014 not modeled here, worth checking separately if relevant.' });
+
+  return stats;
+}
+function makeStub(title, ruleLabel, used, threshold, statusClass, note, direction) {
+  direction = direction || 'atMost';
+  const el = document.createElement('div');
+  el.className = 'stub';
+  const color = statusClass === 'over' ? 'var(--red)' : statusClass === 'warn' ? 'var(--amber)' : 'var(--green)';
+  el.style.setProperty('--stub-color', color);
+  const pct = Math.min((used / threshold) * 100, 100);
+  let statusText, tailNum, tailText;
+  if (direction === 'atLeast') {
+    tailNum = Math.max(threshold - used, 0);
+    tailText = 'needed to qualify';
+    statusText = statusClass === 'ok' ? 'route met' : statusClass === 'warn' ? 'approaching threshold' : 'route not yet met';
+  } else {
+    tailNum = Math.max(threshold - used, 0);
+    tailText = 'remaining';
+    statusText = statusClass === 'over' ? 'threshold reached' : statusClass === 'warn' ? 'approaching limit' : 'within limit';
+  }
+  el.innerHTML =
+    '<h3>' + title + '</h3>' +
+    '<div class="rule">' + ruleLabel + '</div>' +
+    '<div class="num-row"><span class="num">' + used + '</span><span class="of">/ ' + threshold + ' days</span></div>' +
+    '<div class="bar-track"><div class="bar-fill" style="width:' + pct + '%; background:' + color + '"></div></div>' +
+    '<span class="status ' + statusClass + '">' + statusText + (tailNum > 0 ? ' &middot; ' + tailNum + ' ' + tailText : '') + '</span>' +
+    (note ? '<div class="hint" style="margin-top:8px;">' + note + '</div>' : '');
+  return el;
+}
+function jumpToYear(y) {
+  const nowYear = new Date().getUTCFullYear();
+  const todayStr = new Date().toISOString().slice(0, 10);
+  document.getElementById('asof').value = (y === nowYear) ? todayStr : y + '-12-31';
+  calYear = y;
+  calMonth = 0;
+  applyYearDefaultsToBlankDateFields();
+  renderBoard();
+  renderCalendar();
+  renderTable();
+  renderLegTable();
+  populateExpTripSelect();
+  renderExpenseTable();
+  renderGapWarnings();
+  renderNeedsPassList();
+  renderDuplicateWarnings();
+  updateYearFilterLabel();
+}
+
+function renderYearJumpButtons() {
+  const container = document.getElementById('yearJumpButtons');
+  const nowYear = new Date().getUTCFullYear();
+  const years = new Set([nowYear]);
+  trips.forEach(t => { years.add(new Date(t.entry).getUTCFullYear()); years.add(new Date(t.exit).getUTCFullYear()); });
+  const sorted = [...years].filter(y => y).sort((a, b) => a - b);
+  const currentAsof = document.getElementById('asof').value;
+  const todayStr = new Date().toISOString().slice(0, 10);
+  container.innerHTML = sorted.map(y => {
+    const target = (y === nowYear) ? todayStr : y + '-12-31';
+    const isActive = currentAsof === target;
+    return '<button type="button" class="year-jump-btn' + (isActive ? ' active' : '') + '" data-year="' + y + '">' +
+      (y === nowYear ? y + ' (now)' : y) + '</button>';
+  }).join('');
+  container.querySelectorAll('.year-jump-btn').forEach(btn => {
+    btn.onclick = () => jumpToYear(Number(btn.dataset.year));
+  });
+}
+
+function renderBoard() {
+  const asof = parseDate(document.getElementById('asof').value);
+  const board = document.getElementById('board');
+  board.innerHTML = '';
+  const stats = computeStats(asof);
+  stats.forEach(s => board.appendChild(makeStub(s.title, s.ruleLabel, s.used, s.threshold, s.statusClass, s.note, s.direction)));
+  renderYearJumpButtons();
+
+  const ukStub = board.children[1];
+  const ukSel = document.createElement('select');
+  ukSel.className = 'mini';
+  ukSel.innerHTML = '<option value="16">resident recently -&gt; 16-day test</option>' +
+    '<option value="46">not resident recently -&gt; 46-day test</option>' +
+    '<option value="91">full-time work abroad -&gt; 91-day test</option>';
+  ukSel.value = String(ukThresh);
+  ukSel.onchange = async () => { await saveUkThresh(ukSel.value); renderBoard(); };
+  ukStub.appendChild(ukSel);
+
+  const uaeStub = board.children[3];
+  const uaeSel = document.createElement('select');
+  uaeSel.className = 'mini';
+  uaeSel.innerHTML = '<option value="90">90-day route (permit+home+business)</option><option value="183">183-day route (treaty)</option>';
+  uaeSel.value = String(uaeThresh);
+  uaeSel.onchange = async () => { await saveUaeThresh(uaeSel.value); renderBoard(); };
+  uaeStub.appendChild(uaeSel);
+}
+
+// ================= calendar =================
+function findTripForDay(dayMs) { return trips.find(t => overlapDays(t.entry, t.exit, dayMs, dayMs) > 0); }
+function buildFlightDayRoute(dateStr) {
+  const todaysLegs = legs
+    .filter(l => l.depDate === dateStr || l.arrDate === dateStr)
+    .sort((a, b) => (a.depDate + a.id).localeCompare(b.depDate + b.id));
+  if (todaysLegs.length === 0) return null;
+  const label = (country, city) => city || country;
+  const parts = [];
+  todaysLegs.forEach(l => {
+    const fromLabel = label(l.from, l.depCity);
+    const toLabel = label(l.to, l.arrCity);
+    if (parts.length === 0 || parts[parts.length - 1] !== fromLabel) parts.push(fromLabel);
+    if (parts[parts.length - 1] !== toLabel) parts.push(toLabel);
+  });
+  return parts.join(' \u2192 ');
+}
+
+function dayExpenseTags(dateStr) {
+  const dayMs = parseDate(dateStr);
+  return expenses.filter(ex => {
+    if (!ex.date) return false;
+    const start = parseDate(ex.date);
+    let end = ex.endDate ? parseDate(ex.endDate) : start;
+    // Defensive cap: a stray/bad check-out date should never shade months of the calendar.
+    if (end - start > 60 * 86400000) end = start + 60 * 86400000;
+    return dayMs >= start && dayMs <= end;
+  }).map(ex => {
+    if (ex.category === 'Train' && ex.fromPlace && ex.toPlace) return 'Train: ' + ex.fromPlace + ' \u2192 ' + ex.toPlace;
+    return ex.category;
+  });
+}
+
+function jumpToDate(dateStr) {
+  const dayMs = parseDate(dateStr);
+  const matchingLegs = legs.filter(l => l.depDate === dateStr || l.arrDate === dateStr);
+  const matchingTrips = trips.filter(t => overlapDays(t.entry, t.exit, dayMs, dayMs) > 0);
+  const matchingExpenses = expenses.filter(ex => {
+    if (!ex.date) return false;
+    const start = parseDate(ex.date);
+    let end = ex.endDate ? parseDate(ex.endDate) : start;
+    if (end - start > 60 * 86400000) end = start + 60 * 86400000; // same defensive cap as the calendar itself
+    return dayMs >= start && dayMs <= end;
+  });
+  const rowsToHighlight = [];
+
+  matchingLegs.forEach(l => {
+    const row = document.querySelector('tr[data-leg-row="' + l.id + '"]');
+    if (row) rowsToHighlight.push(row);
+  });
+  matchingTrips.forEach(t => {
+    const row = document.querySelector('tr[data-trip-row="' + t.id + '"]');
+    if (row) rowsToHighlight.push(row);
+  });
+  matchingExpenses.forEach(ex => {
+    const row = document.querySelector('tr[data-exp-row="' + ex.id + '"]');
+    if (row) rowsToHighlight.push(row);
+  });
+
+  // Clear any highlight left over from a previous click, everywhere on the page,
+  // so only the currently selected day's rows stay lit up.
+  document.querySelectorAll('tr.row-highlight').forEach(row => row.classList.remove('row-highlight'));
+
+  if (rowsToHighlight.length === 0) return;
+
+  try { rowsToHighlight[0].scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) {}
+  rowsToHighlight.forEach(row => {
+    row.classList.add('row-highlight');
+  });
+}
+
+function renderCalendar() {
+  document.getElementById('calMonthLabel').textContent = new Date(Date.UTC(calYear, calMonth, 1)).toLocaleDateString('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+  const grid = document.getElementById('calGrid');
+  grid.innerHTML = '';
+  ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].forEach(d => { const el = document.createElement('div'); el.className = 'cal-dow'; el.textContent = d; grid.appendChild(el); });
+  const firstOfMonth = Date.UTC(calYear, calMonth, 1);
+  const daysInMonth = new Date(Date.UTC(calYear, calMonth + 1, 0)).getUTCDate();
+  let firstWeekday = new Date(firstOfMonth).getUTCDay();
+  firstWeekday = firstWeekday === 0 ? 6 : firstWeekday - 1;
+  const todayStr = new Date().toISOString().slice(0, 10);
+  for (let i = 0; i < firstWeekday; i++) { const el = document.createElement('div'); el.className = 'cal-day empty'; grid.appendChild(el); }
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dayMs = Date.UTC(calYear, calMonth, d);
+    const dateStr = fmt(dayMs);
+    const trip = findTripForDay(dayMs);
+    const tags = dayExpenseTags(dateStr);
+    const tagText = tags.length > 0 ? ' (' + tags.join(', ') + ')' : '';
+    const transitChain = findTransitChainForDay(dateStr, dayMs);
+    const cell = document.createElement('div');
+    cell.className = 'cal-day' + (dateStr === todayStr ? ' today' : '');
+    if (transitChain) {
+      // A genuine cross-country transit day, built from receipts on both sides (e.g. a duty-free
+      // purchase and a hotel check-in the same day) \u2014 chain them like a multi-leg flight day.
+      cell.title = 'Transit day (receipt-only evidence): ' + transitChain + tagText;
+      cell.style.background = 'var(--alert)';
+      cell.style.borderColor = 'var(--alert)';
+      cell.style.borderWidth = '2px';
+      cell.innerHTML = '<span class="dnum" style="color:#fff;">' + d + '</span>' +
+        '<span class="dcountry" style="color:#fff;">&#9888; ' + transitChain + tagText + '</span>';
+    } else if (trip && trip.evidenceOnly) {
+      // Trip exists but is only backed by a receipt/bill, not a boarding pass or hotel booking.
+      // Flag it boldly on the calendar, same as an unmatched bill, so the weak evidence is obvious.
+      const noteText = trip.note ? ' (' + trip.note + ')' : '';
+      cell.title = (trip.country || trip.region) + (trip.state ? ', ' + trip.state : '') + ' \u2014 receipt-only evidence' + noteText + tagText;
+      cell.style.background = 'var(--alert)';
+      cell.style.borderColor = 'var(--alert)';
+      cell.style.borderWidth = '2px';
+      cell.innerHTML = '<span class="dnum" style="color:#fff;">' + d + '</span>' +
+        '<span class="dcountry" style="color:#fff;">&#9888; ' + (trip.country || trip.region) + noteText + tagText + '</span>';
+    } else if (trip) {
+      const colors = REGION_COLORS[trip.region] || REGION_COLORS.Other;
+      const route = buildFlightDayRoute(dateStr);
+      const isFlightDay = !!route;
+      cell.title = (trip.country || trip.region) + (trip.state ? ', ' + trip.state : '') +
+        (route ? ' (' + route + ')' : (trip.note ? ' \u2013 last confirmed city: ' + trip.note : '')) + tagText;
+      if (isFlightDay) {
+        cell.style.background = colors.border;
+        cell.style.borderColor = colors.border;
+        cell.style.borderWidth = '2px';
+        cell.innerHTML = '<span class="dnum" style="color:#fff;">' + d + '</span>' +
+          '<span class="dcountry" style="color:#fff;">&#9992; ' + route + tagText + '</span>';
+      } else {
+        // Country-level presence only \u2014 no specific city shown here, since we only
+        // confirm the city on the actual flight day itself, never in between.
+        cell.style.background = colors.bg; cell.style.borderColor = colors.border;
+        cell.innerHTML = '<span class="dnum">' + d + '</span><span class="dcountry" style="color:' + colors.text + '">' + (trip.country || trip.region) + tagText + '</span>';
+      }
+    } else if (tags.length > 0) {
+      // No trip logged for this day, but a bill/receipt exists \u2014 flag it boldly so it's not missed.
+      cell.title = tags.join(', ') + ' \u2014 no trip logged for this day yet';
+      cell.style.background = 'var(--alert)';
+      cell.style.borderColor = 'var(--alert)';
+      cell.style.borderWidth = '2px';
+      cell.innerHTML = '<span class="dnum" style="color:#fff;">' + d + '</span>' +
+        '<span class="dcountry" style="color:#fff;">&#9888; ' + tagText.trim() + '</span>';
+    } else {
+      cell.innerHTML = '<span class="dnum">' + d + '</span>';
+    }
+    if (trip || tags.length > 0) {
+      cell.classList.add('has-entry');
+      cell.onclick = () => jumpToDate(dateStr);
+    }
+    grid.appendChild(cell);
+  }
+  document.getElementById('calLegend').innerHTML = Object.entries(REGION_COLORS).map(([region, c]) =>
+    '<span><span class="sw" style="background:' + c.bg + '; border-color:' + c.border + '"></span>' + region + '</span>').join('') +
+    '<span>&#9992; = flight route that day</span>' +
+    '<span>(text) = a bill/receipt logged that day</span>' +
+    '<span>&#9888; bold magenta = a bill exists but no trip covers this day yet, or a receipt-only transit day between two countries</span>' +
+    '<span>click any highlighted day to jump to it in the lists below</span>';
+}
+
+// ================= trips =================
+function tripLabel(t) {
+  return (t.country || t.region) + (t.state ? ', ' + t.state : '') + (t.note ? ' \u2013 ' + t.note : '') + '  (' + t.entry + ' to ' + t.exit + ')';
+}
+let cachedGapsUncovered = [];
+let cachedGapsCovered = [];
+let cachedIncompleteNotes = [];
+function renderGapWarnings() {
+  const warnEl = document.getElementById('legWarnings');
+  if (!warnEl) return;
+  const filterOn = yearFilterActive();
+  const inYear = (item) => !filterOn || overlapsCalYear(fmt(item.start != null ? item.start : item.ms), fmt(item.end != null ? item.end : item.ms));
+  const uncovered = cachedGapsUncovered.filter(inYear);
+  const covered = cachedGapsCovered.filter(inYear);
+  const notes = cachedIncompleteNotes.filter(inYear);
+  let html = '';
+  if (uncovered.length > 0) html += '<div class="print-note-box" style="margin-top:10px; border-color:var(--red); background:var(--red-bg); color:#7a231f;"><strong>&#9888; ' + uncovered.length + ' gap(s) with no evidence at all \u2014 look for these first:</strong><br>' + uncovered.map(g => '&bull; ' + g.msg).join('<br>') + '</div>';
+  if (covered.length > 0) html += '<div class="print-note-box" style="margin-top:10px;"><strong>' + covered.length + ' gap(s) already covered by receipts/hotel \u2014 lower priority:</strong><br>' + covered.map(g => '&bull; ' + g.msg).join('<br>') + '</div>';
+  if (notes.length > 0) html += '<div class="hint" style="margin-top:8px;">' + notes.map(n => n.msg).join('<br>') + '</div>';
+  if (filterOn && html === '' && (cachedGapsUncovered.length + cachedGapsCovered.length + cachedIncompleteNotes.length) > 0) {
+    html = '<p class="hint">No gap warnings for ' + calYear + ' \u2014 untick the year filter above to see the full list.</p>';
+  }
+  warnEl.innerHTML = html;
+}
+
+function findTransitChainForDay(dateStr, dayMs) {
+  // Any evidence-only trip whose FIRST or LAST day is exactly this date is a candidate for a chain.
+  const touching = trips.filter(t => t.evidenceOnly && (t.entry === dateStr || t.exit === dateStr));
+  const distinctCountries = [...new Set(touching.map(t => t.country || t.region))];
+  if (distinctCountries.length < 2) return null;
+  // Order: whichever trip is ENDING here comes first, whichever is STARTING here comes last.
+  const ending = touching.filter(t => t.exit === dateStr && t.entry !== dateStr).map(t => t.country || t.region);
+  const starting = touching.filter(t => t.entry === dateStr && t.exit !== dateStr).map(t => t.country || t.region);
+  const sameDayOnly = touching.filter(t => t.entry === dateStr && t.exit === dateStr).map(t => t.country || t.region);
+  const chain = [...new Set([...ending, ...sameDayOnly, ...starting])];
+  return chain.length > 1 ? chain.join(' \u2192 ') : null;
+}
+
+function applyYearDefaultsToBlankDateFields() {
+  const defaultDate = calYear + '-01-01';
+  ['entryDate', 'exitDate', 'expDate'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el && !el.value) el.value = defaultDate;
+  });
+}
+
+function yearFilterActive() {
+  const el = document.getElementById('yearFilterToggle');
+  return el ? el.checked : false;
+}
+function overlapsCalYear(entryStr, exitStr) {
+  const yearStart = Date.UTC(calYear, 0, 1);
+  const yearEnd = Date.UTC(calYear, 11, 31);
+  const entry = parseDate(entryStr);
+  const exit = exitStr ? parseDate(exitStr) : entry;
+  return entry <= yearEnd && exit >= yearStart;
+}
+function updateYearFilterLabel() {
+  const label = document.getElementById('yearFilterLabel');
+  if (label) label.innerHTML = 'Only show flights, trips, and bills from <strong>' + calYear + '</strong> in the lists below (unticking shows every year at once)';
+}
+
+function renderTable() {
+  const body = document.getElementById('tripBody');
+  body.innerHTML = '';
+  let filtered = trips;
+  if (yearFilterActive()) filtered = filtered.filter(t => overlapsCalYear(t.entry, t.exit));
+  const searchTerm = (document.getElementById('tripSearch').value || '').toLowerCase().trim();
+  if (searchTerm) {
+    filtered = filtered.filter(t => (
+      (t.country || '').toLowerCase().includes(searchTerm) ||
+      (t.state || '').toLowerCase().includes(searchTerm) ||
+      (t.note || '').toLowerCase().includes(searchTerm)
+    ));
+  }
+  if (filtered.length === 0) {
+    body.innerHTML = '<tr class="empty-row"><td colspan="7">' + (trips.length === 0 ? 'No trips yet.' : (searchTerm ? 'No trips match that search.' : 'No trips in ' + calYear + ' \u2014 untick the year filter above to see other years.')) + '</td></tr>';
+    return;
+  }
+  const sorted = [...filtered].sort((a, b) => parseDate(a.entry) - parseDate(b.entry));
+  sorted.forEach(t => {
+    const tr = document.createElement('tr');
+    tr.setAttribute('data-trip-row', t.id);
+    const noteDisplay = (t.note || '') + (t.evidenceOnly ? ' <span style="color:var(--alert); font-weight:bold;">&#9888; receipt-only</span>' : '') + (t.derived ? ' <span style="color:var(--green); font-weight:bold;">&#9992; boarding pass</span>' : '');
+    tr.innerHTML = '<td>' + (t.country || '') + '</td><td>' + (t.state || '') + '</td><td>' + t.entry + '</td><td>' + t.exit + '</td><td>' + daysInclusive(t.entry, t.exit) + '</td><td>' + noteDisplay + '</td>' +
+      '<td><button class="edit-btn" data-id="' + t.id + '">edit</button><button class="del-btn" data-id="' + t.id + '">remove</button></td>';
+    body.appendChild(tr);
+  });
+  body.querySelectorAll('.edit-btn').forEach(btn => {
+    btn.onclick = () => {
+      const t = trips.find(x => x.id === btn.dataset.id);
+      if (!t) return;
+      document.getElementById('tripEditId').value = t.id;
+      document.getElementById('country').value = t.country || 'United Kingdom';
+      document.getElementById('state').value = t.state || '';
+      document.getElementById('entryDate').value = t.entry;
+      document.getElementById('exitDate').value = t.exit;
+      document.getElementById('note').value = t.note || '';
+      document.getElementById('evidenceOnly').checked = !!t.evidenceOnly;
+      document.getElementById('tripSubmitBtn').textContent = 'Update trip';
+      document.getElementById('tripCancelBtn').style.display = 'inline-block';
+      document.getElementById('entryForm').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    };
+  });
+  body.querySelectorAll('.del-btn').forEach(btn => {
+    btn.onclick = async () => {
+      await pushUndo();
+      const removedId = btn.dataset.id;
+      trips = trips.filter(t => t.id !== removedId);
+      const hadExpenses = expenses.some(ex => ex.tripId === removedId);
+      expenses = expenses.filter(ex => ex.tripId !== removedId);
+      await saveTrips();
+      if (hadExpenses) await saveExpenses();
+      if (document.getElementById('tripEditId').value === removedId) resetTripForm();
+      renderAll();
+    };
+  });
+}
+function resetTripForm() {
+  document.getElementById('tripEditId').value = '';
+  document.getElementById('state').value = '';
+  document.getElementById('entryDate').value = '';
+  document.getElementById('exitDate').value = '';
+  document.getElementById('note').value = '';
+  document.getElementById('evidenceOnly').checked = false;
+  document.getElementById('tripSubmitBtn').textContent = 'Add trip';
+  document.getElementById('tripCancelBtn').style.display = 'none';
+}
+
+// ================= flight legs =================
+function renderLegTable() {
+  const body = document.getElementById('legBody');
+  body.innerHTML = '';
+  let filtered = legs;
+  if (yearFilterActive()) filtered = filtered.filter(lg => overlapsCalYear(lg.depDate, lg.arrDate));
+  if (filtered.length === 0) {
+    body.innerHTML = '<tr class="empty-row"><td colspan="7">' + (legs.length === 0 ? 'No flights logged yet.' : 'No flights in ' + calYear + ' \u2014 untick the year filter above to see other years.') + '</td></tr>';
+    return;
+  }
+  const sorted = [...filtered].sort((a, b) => parseDate(a.depDate) - parseDate(b.depDate));
+  sorted.forEach(lg => {
+    const tr = document.createElement('tr');
+    tr.setAttribute('data-leg-row', lg.id);
+    tr.innerHTML = '<td>' + lg.depDate + '</td><td>' + lg.from + '</td><td>' + (lg.depCity || '') + '</td>' +
+      '<td>' + lg.to + '</td><td>' + lg.arrDate + '</td><td>' + (lg.arrCity || '') + '</td>' +
+      '<td><button class="edit-btn" data-id="' + lg.id + '">edit</button><button class="del-btn" data-id="' + lg.id + '">remove</button></td>';
+    body.appendChild(tr);
+  });
+  body.querySelectorAll('.edit-btn').forEach(btn => {
+    btn.onclick = () => {
+      const lg = legs.find(l => l.id === btn.dataset.id);
+      if (!lg) return;
+      document.getElementById('legEditId').value = lg.id;
+      document.getElementById('legDepDate').value = lg.depDate;
+      document.getElementById('legFrom').value = lg.from;
+      document.getElementById('legDepCity').value = lg.depCity || '';
+      document.getElementById('legTo').value = lg.to;
+      document.getElementById('legArrDate').value = lg.arrDate;
+      document.getElementById('legArrCity').value = lg.arrCity || '';
+      document.getElementById('legSubmitBtn').textContent = 'Update flight';
+      document.getElementById('legCancelBtn').style.display = 'inline-block';
+      document.getElementById('legForm').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    };
+  });
+  body.querySelectorAll('.del-btn').forEach(btn => {
+    btn.onclick = async () => {
+      await pushUndo();
+      const removedId = btn.dataset.id;
+      legs = legs.filter(l => l.id !== removedId);
+      await saveLegs();
+      if (document.getElementById('legEditId').value === removedId) resetLegForm();
+      renderLegTable();
+      buildTripsFromLegs();
+    };
+  });
+}
+function resetLegForm() {
+  document.getElementById('legEditId').value = '';
+  document.getElementById('legDepDate').value = '';
+  document.getElementById('legDepCity').value = '';
+  document.getElementById('legArrDate').value = '';
+  document.getElementById('legArrCity').value = '';
+  document.getElementById('legSubmitBtn').textContent = 'Add flight';
+  document.getElementById('legCancelBtn').style.display = 'none';
+}
+function buildTripsFromLegs() {
+  const warnEl = document.getElementById('legWarnings');
+  if (legs.length === 0) {
+    const hadDerived = trips.some(t => t.derived);
+    trips = trips.filter(t => !t.derived);
+    if (hadDerived) { saveTrips().then(() => { renderAll(); populateCloseYearSelect(); }); }
+    document.getElementById('buildStatus').textContent = 'No flights logged \u2014 calendar cleared of flight-built trips.';
+    cachedGapsUncovered = []; cachedGapsCovered = []; cachedIncompleteNotes = [];
+    if (warnEl) warnEl.innerHTML = '';
+    return;
+  }
+  const sorted = [...legs].sort((a, b) => parseDate(a.depDate) - parseDate(b.depDate));
+  const gapsUncovered = [];
+  const gapsCovered = [];
+  for (let i = 0; i < sorted.length - 1; i++) {
+    if (sorted[i].to !== sorted[i + 1].from) {
+      const gapCountry = sorted[i].to;
+      const gapStartMs = parseDate(sorted[i].arrDate);
+      const gapEndMs = parseDate(sorted[i + 1].depDate);
+      const isCovered = trips.some(t => !t.derived && t.country === gapCountry && overlapDays(t.entry, t.exit, gapStartMs, gapEndMs) > 0);
+      const msg = 'No logged flight leaving ' + gapCountry + ' between ' + sorted[i].arrDate + ' and ' + sorted[i + 1].depDate + ' (next flight departs from ' + sorted[i + 1].from + ')' + (isCovered ? ' \u2014 already covered by a receipt/hotel trip, just missing the actual flight.' : ' \u2014 no evidence at all for this stretch yet.');
+      (isCovered ? gapsCovered : gapsUncovered).push({ msg, start: gapStartMs, end: gapEndMs });
+    }
+  }
+  const derived = [];
+
+  // The very first leg's origin country never gets a trip unless an earlier flight arrived
+  // there \u2014 mark at least the departure day itself as presence in that country.
+  const first = sorted[0];
+  derived.push({
+    id: 'derived-origin-' + first.id, country: first.from, region: mapCountryToRegion(first.from),
+    state: '', entry: first.depDate, exit: first.depDate, note: first.depCity || '', derived: true
+  });
+
+  const incompleteNotes = [];
+  for (let i = 0; i < sorted.length; i++) {
+    const arrivalCountry = sorted[i].to;
+    const entryDate = sorted[i].arrDate;
+    const nextLeg = sorted[i + 1];
+    // Only extend to the next flight's departure date if that next flight actually departs
+    // FROM this same country \u2014 a chronologically-next flight from somewhere else (a gap)
+    // must never be used to guess how long this stay lasted.
+    const continuityOk = nextLeg && nextLeg.from === arrivalCountry;
+    const exitDate = continuityOk ? nextLeg.depDate : entryDate;
+    if (!continuityOk) {
+      incompleteNotes.push({
+        msg: arrivalCountry + ' is only counted through ' + entryDate + ' (the arrival date)' +
+          (nextLeg ? ', since the next logged flight departs from ' + nextLeg.from + ' instead.' : ' since no departure flight from there has been logged yet.'),
+        ms: parseDate(entryDate)
+      });
+    }
+    if (parseDate(exitDate) < parseDate(entryDate)) continue;
+    derived.push({
+      id: 'derived-' + sorted[i].id, country: arrivalCountry, region: mapCountryToRegion(arrivalCountry),
+      state: '', entry: entryDate, exit: exitDate,
+      note: sorted[i].arrCity || '',
+      derived: true
+    });
+  }
+  // Remove old flight-derived trips first, but keep manual ones (including evidence-only
+  // receipt-backed entries) so they can be checked against the newly rebuilt derived trips.
+  trips = trips.filter(t => !t.derived);
+  let manualCountBefore = trips.length;
+  let skippedForManualOverride = 0;
+  derived.forEach(d => {
+    // If a manually-owned trip (edited by hand, of any evidence level) already covers this
+    // exact country + date range, trust that correction over blindly re-deriving from the
+    // flight chain again \u2014 otherwise every rebuild would silently recreate the original,
+    // uncorrected stay right alongside the fix, which is exactly the "my edit won't save" bug.
+    const dEntry = parseDate(d.entry), dExit = parseDate(d.exit);
+    const manuallyOwned = trips.some(t => !t.derived && t.country === d.country && overlapDays(t.entry, t.exit, dEntry, dExit) > 0);
+    if (manuallyOwned) { skippedForManualOverride++; return; }
+    trips.push(d);
+    // A real, confirmed flight always outranks a receipt-only guess covering the same day(s) \u2014
+    // this trims or removes any manual/evidence-only trip the new flight now confirms.
+    resolveOverlaps(d, true); // true = only ever supersede evidence-only (receipt-backed) trips here
+  });
+  const manualCountAfter = trips.filter(t => !t.derived).length;
+  const supersededCount = manualCountBefore - manualCountAfter;
+  Promise.all([saveTrips(), saveExpenses()]).then(() => {
+    renderAll(); populateCloseYearSelect();
+    cachedGapsUncovered = gapsUncovered;
+    cachedGapsCovered = gapsCovered;
+    cachedIncompleteNotes = incompleteNotes;
+    renderGapWarnings();
+    document.getElementById('buildStatus').textContent = 'Built ' + derived.length + ' trip(s) from ' + sorted.length + ' flight(s).' +
+      (supersededCount > 0 ? ' ' + supersededCount + ' manual/receipt-only entr' + (supersededCount === 1 ? 'y was' : 'ies were') + ' replaced by newly confirmed flight(s).' : '') +
+      (skippedForManualOverride > 0 ? ' ' + skippedForManualOverride + ' flight-derived stretch' + (skippedForManualOverride === 1 ? '' : 'es') + ' left untouched because you\u2019ve already corrected ' + (skippedForManualOverride === 1 ? 'it' : 'them') + ' by hand.' : '');
+  });
+}
+
+// ================= expenses =================
+function populateExpTripSelect() {
+  const sel = document.getElementById('expTrip');
+  const prevVal = sel.value;
+  const editingTripId = document.getElementById('expEditId').value
+    ? (expenses.find(ex => ex.id === document.getElementById('expEditId').value) || {}).tripId
+    : null;
+  let pool = trips;
+  if (yearFilterActive()) {
+    pool = trips.filter(t => overlapsCalYear(t.entry, t.exit) || t.id === editingTripId);
+  }
+  const sorted = [...pool].sort((a, b) => parseDate(b.entry) - parseDate(a.entry));
+  const newTripOption = '<option value="__new__">+ Create a new trip for this bill</option>';
+  if (sorted.length === 0) { sel.innerHTML = newTripOption; sel.value = '__new__'; updateNewTripFieldVisibility(); return; }
+  sel.innerHTML = newTripOption + sorted.map(t => '<option value="' + t.id + '">' + tripLabel(t) + '</option>').join('');
+  if (prevVal && (prevVal === '__new__' || sorted.some(t => t.id === prevVal))) sel.value = prevVal;
+  updateUaeResidenceVisibility();
+  updateNewTripFieldVisibility();
+}
+function renderExpenseTable() {
+  const body = document.getElementById('expenseBody');
+  body.innerHTML = '';
+  let filtered = expenses;
+  if (yearFilterActive()) filtered = filtered.filter(ex => ex.date && overlapsCalYear(ex.date, ex.endDate));
+  const searchTerm = (document.getElementById('expSearch').value || '').toLowerCase().trim();
+  if (searchTerm) {
+    filtered = filtered.filter(ex => {
+      const trip = trips.find(t => t.id === ex.tripId);
+      const tripText = trip ? tripLabel(trip) : '';
+      return tripText.toLowerCase().includes(searchTerm) ||
+        (ex.category || '').toLowerCase().includes(searchTerm) ||
+        (ex.vendor || '').toLowerCase().includes(searchTerm);
+    });
+  }
+  if (filtered.length === 0) {
+    body.innerHTML = '<tr class="empty-row"><td colspan="6">' + (expenses.length === 0 ? 'No bills logged yet.' : (searchTerm ? 'No bills match that search.' : 'No bills in ' + calYear + ' \u2014 untick the year filter above to see other years.')) + '</td></tr>';
+    return;
+  }
+  const sorted = [...filtered].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  sorted.forEach(ex => {
+    const trip = trips.find(t => t.id === ex.tripId);
+    const tr = document.createElement('tr');
+    tr.setAttribute('data-exp-row', ex.id);
+    const tripCell = trip ? tripLabel(trip) : '<span style="color:var(--red); font-weight:bold;">(trip removed \u2014 click edit to reattach)</span>';
+    const dateCell = ex.date ? (ex.endDate && ex.endDate !== ex.date ? ex.date + ' to ' + ex.endDate : ex.date) : '';
+    const routeText = (ex.category === 'Train' && ex.fromPlace && ex.toPlace) ? ' (' + ex.fromPlace + ' \u2192 ' + ex.toPlace + ')' : '';
+    const uaeBadge = ex.uaeResidence ? ' <span style="color:#a3312c; font-weight:bold;">&#127968; residence/company</span>' : '';
+    tr.innerHTML = '<td>' + tripCell + '</td><td>' + ex.category + '</td><td>' + (ex.vendor || '') + routeText + uaeBadge + '</td><td>' + dateCell + '</td>' +
+      '<td>' + (ex.amount != null ? Number(ex.amount).toFixed(2) + ' ' + (ex.currency || '') : '') + '</td>' +
+      '<td><button class="edit-btn" data-id="' + ex.id + '">edit</button><button class="del-btn" data-id="' + ex.id + '">remove</button></td>';
+    body.appendChild(tr);
+  });
+  body.querySelectorAll('.edit-btn').forEach(btn => {
+    btn.onclick = () => {
+      const ex = expenses.find(x => x.id === btn.dataset.id);
+      if (!ex) return;
+      document.getElementById('expEditId').value = ex.id;
+      populateExpTripSelect();
+      const tripSel = document.getElementById('expTrip');
+      tripSel.value = ex.tripId;
+      updateUaeResidenceVisibility();
+      document.getElementById('expUaeResidence').checked = !!ex.uaeResidence;
+      document.getElementById('expCategory').value = ex.category;
+      updateCategoryFieldVisibility();
+      document.getElementById('expVendor').value = ex.vendor || '';
+      document.getElementById('expDate').value = ex.date || '';
+      document.getElementById('expEndDate').value = ex.endDate || '';
+      document.getElementById('expFrom').value = ex.fromPlace || '';
+      document.getElementById('expTo').value = ex.toPlace || '';
+      document.getElementById('expAmount').value = ex.amount != null ? ex.amount : '';
+      document.getElementById('expCurrency').value = ex.currency || '';
+      document.getElementById('expSubmitBtn').textContent = 'Update bill';
+      document.getElementById('expCancelBtn').style.display = 'inline-block';
+      document.getElementById('expenseForm').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    };
+  });
+  body.querySelectorAll('.del-btn').forEach(btn => {
+    btn.onclick = async () => { await pushUndo(); expenses = expenses.filter(ex => ex.id !== btn.dataset.id); await saveExpenses(); renderExpenseTable(); renderCalendar(); };
+  });
+}
+
+function updateCategoryFieldVisibility() {
+  const category = document.getElementById('expCategory').value;
+  const endDateWrap = document.getElementById('expEndDateWrap');
+  const endDateRelevant = category === 'Hotel' || category === 'Fuel'; // Fuel covers car rental, which can also span days
+  endDateWrap.style.display = endDateRelevant ? 'block' : 'none';
+  if (!endDateRelevant) document.getElementById('expEndDate').value = '';
+
+  const isTrain = category === 'Train';
+  document.getElementById('expFromWrap').style.display = isTrain ? 'block' : 'none';
+  document.getElementById('expToWrap').style.display = isTrain ? 'block' : 'none';
+  if (!isTrain) { document.getElementById('expFrom').value = ''; document.getElementById('expTo').value = ''; }
+}
+document.getElementById('expCategory').addEventListener('change', updateCategoryFieldVisibility);
+
+function updateNewTripFieldVisibility() {
+  const isNew = document.getElementById('expTrip').value === '__new__';
+  document.getElementById('expNewTripWrap').style.display = isNew ? 'flex' : 'none';
+  updateUaeResidenceVisibility();
+}
+document.getElementById('expTrip').addEventListener('change', updateNewTripFieldVisibility);
+
+function updateUaeResidenceVisibility() {
+  const tripId = document.getElementById('expTrip').value;
+  let isUae;
+  if (tripId === '__new__') {
+    isUae = document.getElementById('expNewTripCountry').value === 'United Arab Emirates';
+  } else {
+    const trip = trips.find(t => t.id === tripId);
+    isUae = trip && trip.region === 'UAE';
+  }
+  const wrap = document.getElementById('expUaeResidenceWrap');
+  wrap.style.display = isUae ? 'flex' : 'none';
+  if (!isUae) document.getElementById('expUaeResidence').checked = false;
+}
+document.getElementById('expNewTripCountry').addEventListener('change', updateUaeResidenceVisibility);
+
+function autofillNewTripDatesFromBill() {
+  if (document.getElementById('expTrip').value !== '__new__') return;
+  const billDate = document.getElementById('expDate').value;
+  const billEndDate = document.getElementById('expEndDate').value;
+  const tripEntry = document.getElementById('expNewTripEntry');
+  const tripExit = document.getElementById('expNewTripExit');
+  if (billDate && !tripEntry.value) tripEntry.value = billDate;
+  if ((billEndDate || billDate) && !tripExit.value) tripExit.value = billEndDate || billDate;
+}
+document.getElementById('expDate').addEventListener('change', autofillNewTripDatesFromBill);
+document.getElementById('expEndDate').addEventListener('change', autofillNewTripDatesFromBill);
+
+function resetExpenseForm() {
+  document.getElementById('expEditId').value = '';
+  document.getElementById('expVendor').value = '';
+  document.getElementById('expEndDate').value = '';
+  document.getElementById('expAmount').value = '';
+  document.getElementById('expCurrency').value = '';
+  document.getElementById('expSubmitBtn').textContent = 'Add bill';
+  document.getElementById('expCancelBtn').style.display = 'none';
+  document.getElementById('expUaeResidence').checked = false;
+  document.getElementById('expNewTripEntry').value = '';
+  document.getElementById('expNewTripExit').value = '';
+  updateCategoryFieldVisibility();
+}
+document.getElementById('expCancelBtn').addEventListener('click', resetExpenseForm);
+updateCategoryFieldVisibility();
+
+// ================= year close / print =================
+function populateCloseYearSelect() {
+  const sel = document.getElementById('closeYear');
+  const prevVal = sel.value;
+  const nowYear = new Date().getUTCFullYear();
+  const years = new Set();
+  for (let y = nowYear + 1; y >= nowYear - 10; y--) years.add(y);
+  trips.forEach(t => { years.add(new Date(t.entry).getUTCFullYear()); years.add(new Date(t.exit).getUTCFullYear()); });
+  const sorted = [...years].filter(y => y).sort((a, b) => b - a);
+  sel.innerHTML = sorted.map(y => '<option value="' + y + '">' + y + '</option>').join('');
+  sel.value = (prevVal && sorted.includes(Number(prevVal))) ? prevVal : String(nowYear);
+}
+function statusLabel(s, direction) {
+  if (direction === 'atLeast') return s === 'ok' ? 'ROUTE MET' : s === 'warn' ? 'approaching threshold' : 'route not yet met';
+  return s === 'over' ? 'THRESHOLD REACHED' : s === 'warn' ? 'approaching limit' : 'within limit';
+}
+function buildPrintSummary(year, note) {
+  const yearEndMs = Date.UTC(Number(year), 11, 31);
+  const yearStartMs = Date.UTC(Number(year), 0, 1);
+  const stats = computeStats(yearEndMs);
+  const yearTrips = trips.filter(t => overlapDays(t.entry, t.exit, yearStartMs, yearEndMs) > 0).sort((a, b) => parseDate(a.entry) - parseDate(b.entry));
+
+  let html = '<div class="print-header"><h2>Travel Day-Count Summary &mdash; ' + year + '</h2>' +
+    '<div class="meta">Generated ' + new Date().toISOString().slice(0, 10) + ' from this device\'s local record.</div></div>';
+
+  html += '<table class="ledger" style="margin-bottom:16px;"><thead><tr><th>Jurisdiction</th><th>Rule</th><th>Days used</th><th>Threshold</th><th>Status</th></tr></thead><tbody>';
+  stats.forEach(s => { html += '<tr><td>' + s.title + '</td><td>' + s.ruleLabel + '</td><td>' + s.used + '</td><td>' + s.threshold + '</td><td>' + statusLabel(s.statusClass, s.direction) + '</td></tr>'; });
+  html += '</tbody></table>';
+
+  html += '<table class="ledger"><thead><tr><th>Country</th><th>State</th><th>Entry</th><th>Exit</th><th>Days</th><th>Notes</th></tr></thead><tbody>';
+  if (yearTrips.length === 0) html += '<tr class="empty-row"><td colspan="6">No trips logged for ' + year + '.</td></tr>';
+  else yearTrips.forEach(t => { html += '<tr><td>' + (t.country || '') + '</td><td>' + (t.state || '') + '</td><td>' + t.entry + '</td><td>' + t.exit + '</td><td>' + daysInclusive(t.entry, t.exit) + '</td><td>' + (t.note || '') + '</td></tr>'; });
+  html += '</tbody></table>';
+
+  const yearTripIds = new Set(yearTrips.map(t => t.id));
+  const yearExpenses = expenses.filter(ex => yearTripIds.has(ex.tripId)).sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+  if (yearExpenses.length > 0) {
+    html += '<h3 style="font-size:13px; font-weight:normal; margin:18px 0 8px;">Bills</h3>';
+    html += '<table class="ledger"><thead><tr><th>Trip</th><th>Type</th><th>Vendor</th><th>Date</th><th>Amount</th></tr></thead><tbody>';
+    yearExpenses.forEach(ex => {
+      const trip = trips.find(t => t.id === ex.tripId);
+      const dateCell = ex.date ? (ex.endDate && ex.endDate !== ex.date ? ex.date + ' to ' + ex.endDate : ex.date) : '';
+      html += '<tr><td>' + (trip ? tripLabel(trip) : '(trip removed)') + '</td><td>' + ex.category + '</td><td>' + (ex.vendor || '') + '</td><td>' + dateCell + '</td><td>' + (ex.amount != null ? Number(ex.amount).toFixed(2) + ' ' + (ex.currency || '') : '') + '</td></tr>';
+    });
+    html += '</tbody></table>';
+    const totals = {};
+    yearExpenses.forEach(ex => { if (ex.amount == null) return; const cur = ex.currency || '(unspecified)'; totals[cur] = (totals[cur] || 0) + Number(ex.amount); });
+    const totalStr = Object.entries(totals).map(([cur, amt]) => amt.toFixed(2) + ' ' + cur).join('   +   ');
+    if (totalStr) html += '<div class="print-note-box"><strong>Total spend by currency:</strong> ' + totalStr + '</div>';
+  }
+
+  if (note) html += '<div class="print-note-box"><strong>Note:</strong> ' + note + '</div>';
+  html += '<div class="hint" style="margin-top:16px; border-top:1px dashed var(--line-strong); padding-top:10px;">' + yearTrips.length + ' trip(s) for ' + year + '. Prepared ' + new Date().toISOString().slice(0, 10) + '.</div>';
+  return html;
+}
+
+// ================= render all =================
+function findDuplicateTrips() {
+  const groups = {};
+  let pool = trips;
+  if (yearFilterActive()) pool = pool.filter(t => overlapsCalYear(t.entry, t.exit));
+  pool.forEach(t => {
+    const key = [t.country, t.state || '', t.entry, t.exit].join('|');
+    (groups[key] = groups[key] || []).push(t);
+  });
+  return Object.values(groups).filter(g => g.length > 1);
+}
+function renderDuplicateWarnings() {
+  const el = document.getElementById('dupWarnings');
+  if (!el) return;
+  const dups = findDuplicateTrips();
+  if (dups.length === 0) { el.innerHTML = ''; return; }
+  const rows = dups.map(group => {
+    const t = group[0];
+    const extras = group.slice(1);
+    const removeBtns = extras.map(ex => '<button class="del-btn" data-dup-id="' + ex.id + '" style="margin-left:6px;">remove this duplicate</button>').join('');
+    return '&bull; <strong>' + t.country + (t.state ? ', ' + t.state : '') + '</strong> (' + t.entry + ' to ' + t.exit + ') appears ' + group.length + ' times.' + removeBtns;
+  }).join('<br>');
+  el.innerHTML = '<div class="print-note-box" style="margin-bottom:12px;"><strong>' + dups.length + ' possible duplicate trip(s) found:</strong><br>' + rows + '</div>';
+  el.querySelectorAll('[data-dup-id]').forEach(btn => {
+    btn.onclick = async () => {
+      await pushUndo();
+      const id = btn.dataset.dupId;
+      trips = trips.filter(t => t.id !== id);
+      const hadExpenses = expenses.some(ex => ex.tripId === id);
+      expenses = expenses.filter(ex => ex.tripId !== id);
+      await saveTrips();
+      if (hadExpenses) await saveExpenses();
+      renderAll();
+    };
+  });
+}
+function renderNeedsPassList() {
+  const el = document.getElementById('needsPassList');
+  if (!el) return;
+  let needing = trips.filter(t => t.evidenceOnly);
+  const totalCount = needing.length;
+  if (yearFilterActive()) needing = needing.filter(t => overlapsCalYear(t.entry, t.exit));
+  needing = needing.sort((a, b) => parseDate(a.entry) - parseDate(b.entry));
+  if (needing.length === 0) {
+    el.innerHTML = totalCount > 0 && yearFilterActive()
+      ? '<p class="hint">Nothing outstanding for ' + calYear + ' \u2014 untick the year filter above to see all ' + totalCount + '.</p>'
+      : '<p class="hint" style="color:var(--green);">\u2713 Nothing outstanding \u2014 every trip currently has stronger evidence than a bare receipt.</p>';
+    return;
+  }
+  const rows = needing.map(t =>
+    '<tr><td>' + t.country + (t.state ? ', ' + t.state : '') + '</td><td>' + t.entry + '</td><td>' + t.exit + '</td><td>' + (t.note || '') + '</td>' +
+    '<td><button class="edit-btn" data-needpass-id="' + t.id + '">edit this trip</button></td></tr>'
+  ).join('');
+  el.innerHTML = '<table class="ledger"><thead><tr><th>Country</th><th>Entry</th><th>Exit</th><th>Notes</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>';
+  el.querySelectorAll('[data-needpass-id]').forEach(btn => {
+    btn.onclick = () => {
+      document.getElementById('tripSearch').value = '';
+      renderTable();
+      const editBtn = document.querySelector('tr[data-trip-row="' + btn.dataset.needpassId + '"] .edit-btn');
+      if (editBtn) editBtn.click();
+    };
+  });
+}
+
+function renderAll() { renderBoard(); renderTable(); renderCalendar(); renderLegTable(); populateExpTripSelect(); renderExpenseTable(); renderDuplicateWarnings(); renderNeedsPassList(); }
+
+// ================= events: trips =================
+async function backfillTripsFromHotelBills() {
+  await pushUndo();
+  const hotelBills = expenses.filter(ex => ex.category === 'Hotel' && ex.date);
+  let createdCount = 0;
+  hotelBills.forEach(ex => {
+    const start = ex.date;
+    const end = ex.endDate || ex.date;
+    const currentTrip = trips.find(t => t.id === ex.tripId);
+    if (!currentTrip) return; // orphaned bill, unrelated to this
+    if (!currentTrip.evidenceOnly) return; // never touch a flight-confirmed trip
+    if (currentTrip.entry === start && currentTrip.exit === end) return; // already precise, nothing to do
+    const newTrip = { id: uid(), country: currentTrip.country, region: currentTrip.region, state: currentTrip.state || '', entry: start, exit: end, note: 'Hotel: ' + (ex.vendor || ''), evidenceOnly: true };
+    trips.push(newTrip);
+    resolveOverlaps(newTrip, true); // receipt-only only ever carves into other receipt-only trips
+    ex.tripId = newTrip.id;
+    createdCount++;
+  });
+  if (createdCount > 0) {
+    await Promise.all([saveTrips(), saveExpenses()]);
+    renderAll();
+    populateCloseYearSelect();
+  }
+  return createdCount;
+}
+document.getElementById('backfillHotelBtn').addEventListener('click', async () => {
+  const statusEl = document.getElementById('backfillStatus');
+  statusEl.textContent = 'Working\u2026';
+  statusEl.style.color = 'var(--ink-soft)';
+  const count = await backfillTripsFromHotelBills();
+  statusEl.textContent = count > 0
+    ? '\u2713 Created ' + count + ' precise trip(s) from hotel bookings already logged.'
+    : 'Nothing to do \u2014 every hotel booking already has its own precise trip.';
+  statusEl.style.color = count > 0 ? 'var(--green)' : 'var(--ink-soft)';
+});
+
+async function upgradeReceiptBackedTrips() {
+  await pushUndo();
+  let upgradedCount = 0;
+  trips.filter(t => t.evidenceOnly).forEach(t => {
+    const hasBill = expenses.some(ex => ex.tripId === t.id);
+    if (hasBill) { t.evidenceOnly = false; upgradedCount++; }
+  });
+  if (upgradedCount > 0) {
+    await saveTrips();
+    renderAll();
+    populateCloseYearSelect();
+  }
+  return upgradedCount;
+}
+document.getElementById('upgradeAllBtn').addEventListener('click', async () => {
+  const statusEl = document.getElementById('backfillStatus');
+  statusEl.textContent = 'Working\u2026';
+  statusEl.style.color = 'var(--ink-soft)';
+  const tightened = await backfillTripsFromHotelBills();
+  const upgraded = await upgradeReceiptBackedTrips();
+  const parts = [];
+  if (tightened > 0) parts.push(tightened + ' precise trip(s) created from hotel bookings');
+  if (upgraded > 0) parts.push(upgraded + ' trip(s) upgraded to fully confirmed, since they already have bills attached');
+  statusEl.textContent = parts.length > 0 ? '\u2713 ' + parts.join('; ') + '.' : 'Nothing to do \u2014 every trip is already either confirmed or has no evidence to upgrade from.';
+  statusEl.style.color = parts.length > 0 ? 'var(--green)' : 'var(--ink-soft)';
+});
+
+function reassignOrphanedExpenses() {
+  let changed = false;
+  const validIds = new Set(trips.map(t => t.id));
+  expenses.forEach(ex => {
+    if (!validIds.has(ex.tripId) && ex.date) {
+      const dayMs = parseDate(ex.date);
+      const covering = trips.find(t => overlapDays(t.entry, t.exit, dayMs, dayMs) > 0);
+      if (covering) { ex.tripId = covering.id; changed = true; }
+    }
+  });
+  return changed;
+}
+
+function resolveOverlaps(newTrip, restrictToEvidenceOnly) {
+  const newEntry = parseDate(newTrip.entry);
+  const newExit = parseDate(newTrip.exit);
+  const toRemove = [];
+  const toAdd = [];
+  let adjustedCount = 0;
+
+  trips.forEach(t => {
+    if (t.id === newTrip.id) return;
+    if (restrictToEvidenceOnly && !t.evidenceOnly) return; // never touch an ordinary, properly-entered trip here
+    const tEntry = parseDate(t.entry);
+    const tExit = parseDate(t.exit);
+    const overlapStart = Math.max(tEntry, newEntry);
+    const overlapEnd = Math.min(tExit, newExit);
+    if (overlapStart > overlapEnd) return; // no overlap at all
+
+    // A single shared boundary day between two DIFFERENT-country evidence-only trips is a
+    // real transit/layover day (e.g. a Dubai duty-free receipt the same day a hotel stay in
+    // Italy begins) \u2014 not a duplicate. Leave both intact so the calendar can chain them.
+    if (restrictToEvidenceOnly && t.evidenceOnly && t.country !== newTrip.country &&
+        overlapStart === overlapEnd &&
+        (overlapStart === tEntry || overlapStart === tExit) &&
+        (overlapStart === newEntry || overlapStart === newExit)) {
+      return;
+    }
+
+    adjustedCount++;
+
+    // New trip fully covers the old one -> the old one is entirely replaced
+    if (newEntry <= tEntry && tExit <= newExit) {
+      toRemove.push(t.id);
+      return;
+    }
+    // Old trip fully contains the new one -> split into a before-piece and after-piece
+    if (tEntry < newEntry && newExit < tExit) {
+      toRemove.push(t.id);
+      const piece1Exit = newEntry - 86400000;
+      const piece2Entry = newExit + 86400000;
+      if (piece1Exit >= tEntry) toAdd.push({ ...t, id: uid(), entry: t.entry, exit: fmt(piece1Exit) });
+      if (piece2Entry <= tExit) toAdd.push({ ...t, id: uid(), entry: fmt(piece2Entry), exit: t.exit });
+      return;
+    }
+    // New trip covers the start of the old one -> trim the old one's start forward
+    if (newEntry <= tEntry && newExit < tExit) {
+      toRemove.push(t.id);
+      const trimmedEntry = newExit + 86400000;
+      if (trimmedEntry <= tExit) toAdd.push({ ...t, id: uid(), entry: fmt(trimmedEntry), exit: t.exit });
+      return;
+    }
+    // New trip covers the end of the old one -> trim the old one's end back
+    if (tEntry < newEntry && tExit <= newExit) {
+      toRemove.push(t.id);
+      const trimmedExit = newEntry - 86400000;
+      if (tEntry <= trimmedExit) toAdd.push({ ...t, id: uid(), entry: t.entry, exit: fmt(trimmedExit) });
+      return;
+    }
+  });
+
+  if (toRemove.length > 0 || toAdd.length > 0) {
+    trips = trips.filter(t => !toRemove.includes(t.id)).concat(toAdd);
+    reassignOrphanedExpenses();
+  }
+  return adjustedCount;
+}
+
+document.getElementById('entryForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  await pushUndo();
+  const editId = document.getElementById('tripEditId').value;
+  const country = document.getElementById('country').value;
+  const region = mapCountryToRegion(country);
+  const state = document.getElementById('state').value;
+  const entry = document.getElementById('entryDate').value;
+  const exit = document.getElementById('exitDate').value;
+  const note = document.getElementById('note').value;
+  const evidenceOnly = document.getElementById('evidenceOnly').checked;
+  if (!entry || !exit) return;
+  if (parseDate(exit) < parseDate(entry)) { alert('Exit date is before entry date.'); return; }
+  let savedTrip;
+  if (editId) {
+    const idx = trips.findIndex(t => t.id === editId);
+    if (idx > -1) {
+      const newId = editId.startsWith('derived-') ? uid() : editId;
+      savedTrip = { id: newId, country, region, state, entry, exit, note, evidenceOnly };
+      trips[idx] = savedTrip;
+    }
+  } else {
+    savedTrip = { id: uid(), country, region, state, entry, exit, note, evidenceOnly };
+    trips.push(savedTrip);
+  }
+  const adjustedCount = savedTrip ? resolveOverlaps(savedTrip, !!savedTrip.evidenceOnly) : 0;
+  await saveTrips();
+  if (adjustedCount > 0) await saveExpenses();
+  resetTripForm();
+  renderAll();
+  populateCloseYearSelect();
+  if (adjustedCount > 0) {
+    const statusEl = document.getElementById('tripFormStatus') || (() => {
+      const el = document.createElement('div');
+      el.id = 'tripFormStatus';
+      el.className = 'hint';
+      el.style.marginTop = '8px';
+      document.getElementById('entryForm').insertAdjacentElement('afterend', el);
+      return el;
+    })();
+    statusEl.style.color = 'var(--green)';
+    statusEl.textContent = '\u2713 Trip added \u2014 automatically adjusted ' + adjustedCount + ' existing trip(s) that overlapped these dates, so nothing double-counts.';
+  }
+});
+document.getElementById('tripCancelBtn').addEventListener('click', resetTripForm);
+document.getElementById('asof').addEventListener('change', renderBoard);
+
+// ================= events: flight legs =================
+document.getElementById('legForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  await pushUndo();
+  const statusEl = document.getElementById('legFormStatus');
+  try {
+    const editId = document.getElementById('legEditId').value;
+    const depDate = document.getElementById('legDepDate').value;
+    const from = document.getElementById('legFrom').value;
+    const depCity = document.getElementById('legDepCity').value;
+    const to = document.getElementById('legTo').value;
+    let arrDate = document.getElementById('legArrDate').value;
+    const arrCity = document.getElementById('legArrCity').value;
+    if (!depDate) { statusEl.textContent = 'Departure date is required \u2014 please fill it in.'; statusEl.style.color = 'var(--red)'; return; }
+    if (!from || !to) { statusEl.textContent = 'Please choose both a From and a To country.'; statusEl.style.color = 'var(--red)'; return; }
+    if (!arrDate) arrDate = depDate;
+    if (parseDate(arrDate) < parseDate(depDate)) { statusEl.textContent = 'Arrival date is before departure date.'; statusEl.style.color = 'var(--red)'; return; }
+    if (editId) {
+      const idx = legs.findIndex(l => l.id === editId);
+      if (idx > -1) legs[idx] = { id: editId, depDate, from, depCity, to, arrDate, arrCity };
+    } else {
+      legs.push({ id: uid(), depDate, from, depCity, to, arrDate, arrCity });
+    }
+    await saveLegs();
+    resetLegForm();
+    statusEl.textContent = '\u2713 Flight added and calendar updated \u2014 ' + legs.length + ' flight(s) logged. Storage: ' + storageMode + (storageOk ? ' (saved)' : ' (NOT SAVED \u2014 see warning above)');
+    statusEl.style.color = storageOk ? 'var(--green)' : 'var(--red)';
+    renderLegTable();
+    buildTripsFromLegs();
+  } catch (err) {
+    statusEl.textContent = 'Something went wrong adding this flight: ' + err.message + ' (please screenshot this message)';
+    statusEl.style.color = 'var(--red)';
+  }
+});
+document.getElementById('legCancelBtn').addEventListener('click', resetLegForm);
+document.getElementById('buildTripsBtn').addEventListener('click', async () => { await pushUndo(); buildTripsFromLegs(); });
+
+// ================= events: calendar =================
+document.getElementById('calPrev').addEventListener('click', () => { calMonth--; if (calMonth < 0) { calMonth = 11; calYear--; } applyYearDefaultsToBlankDateFields(); renderCalendar(); renderTable(); renderLegTable(); populateExpTripSelect(); renderExpenseTable(); renderGapWarnings(); renderNeedsPassList(); renderDuplicateWarnings(); updateYearFilterLabel(); });
+
+function goToManualYear() {
+  const val = Number(document.getElementById('manualYearInput').value);
+  if (val && val > 1900 && val < 2200) {
+    jumpToYear(val);
+    document.getElementById('manualYearInput').value = '';
+  }
+}
+document.getElementById('manualYearGoBtn').addEventListener('click', goToManualYear);
+document.getElementById('manualYearInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); goToManualYear(); } });
+document.getElementById('calNext').addEventListener('click', () => { calMonth++; if (calMonth > 11) { calMonth = 0; calYear++; } applyYearDefaultsToBlankDateFields(); renderCalendar(); renderTable(); renderLegTable(); populateExpTripSelect(); renderExpenseTable(); renderGapWarnings(); renderNeedsPassList(); renderDuplicateWarnings(); updateYearFilterLabel(); });
+
+// ================= events: expenses =================
+document.getElementById('expenseForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  await pushUndo();
+  const statusEl = document.getElementById('expFormStatus');
+  try {
+    const editId = document.getElementById('expEditId').value;
+    let tripId = document.getElementById('expTrip').value;
+    if (!tripId) { statusEl.textContent = 'Please log a trip first, then attach bills to it.'; statusEl.style.color = 'var(--red)'; return; }
+    const createdNewTrip = tripId === '__new__';
+    let newTripSupersededCount = 0;
+    if (createdNewTrip) {
+      const ntCountry = document.getElementById('expNewTripCountry').value;
+      const ntEntry = document.getElementById('expNewTripEntry').value;
+      const ntExit = document.getElementById('expNewTripExit').value;
+      if (!ntEntry || !ntExit) { statusEl.textContent = 'Please give the new trip an entry and exit date.'; statusEl.style.color = 'var(--red)'; return; }
+      if (parseDate(ntExit) < parseDate(ntEntry)) { statusEl.textContent = 'The new trip\u2019s exit date is before its entry date.'; statusEl.style.color = 'var(--red)'; return; }
+      const newTrip = { id: uid(), country: ntCountry, region: mapCountryToRegion(ntCountry), state: '', entry: ntEntry, exit: ntExit, note: 'Created from a bill', evidenceOnly: true };
+      trips.push(newTrip);
+      newTripSupersededCount = resolveOverlaps(newTrip, true); // receipt-only, so it can only ever affect other receipt-only trips
+      await saveTrips();
+      tripId = newTrip.id;
+      populateExpTripSelect();
+      document.getElementById('expTrip').value = tripId;
+    }
+    const category = document.getElementById('expCategory').value;
+    const vendor = document.getElementById('expVendor').value;
+    const date = document.getElementById('expDate').value;
+    const endDateRaw = (category === 'Hotel' || category === 'Fuel') ? document.getElementById('expEndDate').value : '';
+    if (endDateRaw && date && parseDate(endDateRaw) < parseDate(date)) {
+      statusEl.textContent = 'Check-out date is before the check-in date.'; statusEl.style.color = 'var(--red)'; return;
+    }
+    if (endDateRaw && date && (parseDate(endDateRaw) - parseDate(date)) / 86400000 > 60) {
+      statusEl.textContent = 'That\u2019s a ' + Math.round((parseDate(endDateRaw) - parseDate(date)) / 86400000) + '-day span between check-in and check-out \u2014 please double check these dates before saving (a bill this long will shade every one of those days on the calendar).';
+      statusEl.style.color = 'var(--red)';
+      return;
+    }
+    const endDate = endDateRaw || null;
+    const fromPlace = category === 'Train' ? document.getElementById('expFrom').value : '';
+    const toPlace = category === 'Train' ? document.getElementById('expTo').value : '';
+    const selectedTrip = trips.find(t => t.id === tripId);
+    const uaeResidence = (selectedTrip && selectedTrip.region === 'UAE') ? document.getElementById('expUaeResidence').checked : false;
+    const amountRaw = document.getElementById('expAmount').value;
+    const currency = document.getElementById('expCurrency').value.toUpperCase();
+    const countBefore = expenses.length;
+    if (editId) {
+      const idx = expenses.findIndex(x => x.id === editId);
+      if (idx > -1) expenses[idx] = { id: editId, tripId, category, vendor, date: date || null, endDate, fromPlace: fromPlace || null, toPlace: toPlace || null, uaeResidence, amount: amountRaw === '' ? null : Number(amountRaw), currency: currency || null };
+    } else {
+      expenses.push({ id: uid(), tripId, category, vendor, date: date || null, endDate, fromPlace: fromPlace || null, toPlace: toPlace || null, uaeResidence, amount: amountRaw === '' ? null : Number(amountRaw), currency: currency || null });
+    }
+    await saveExpenses();
+    resetExpenseForm();
+    renderExpenseTable();
+    renderCalendar();
+    if (createdNewTrip) {
+      renderTable(); renderNeedsPassList(); renderDuplicateWarnings(); populateExpTripSelect();
+    }
+    const newTripNote = newTripSupersededCount > 0 ? ' A new trip was created for this bill (' + newTripSupersededCount + ' receipt-only entr' + (newTripSupersededCount === 1 ? 'y was' : 'ies were') + ' merged into it).' : '';
+    statusEl.textContent = editId
+      ? '\u2713 Bill updated and reattached.'
+      : '\u2713 Bill added \u2014 ' + countBefore + ' \u2192 ' + expenses.length + ' bill(s) total now.' + newTripNote + ' Storage: ' + storageMode + (storageOk ? ' (saved)' : ' (NOT SAVED)');
+    statusEl.style.color = storageOk ? 'var(--green)' : 'var(--red)';
+  } catch (err) {
+    statusEl.textContent = 'Something went wrong saving this bill: ' + err.message + ' (please screenshot this message)';
+    statusEl.style.color = 'var(--red)';
+  }
+});
+
+// ================= events: print =================
+document.getElementById('prepareBtn').addEventListener('click', () => {
+  const year = document.getElementById('closeYear').value;
+  const note = document.getElementById('closeNote').value;
+  const area = document.getElementById('printArea');
+  area.innerHTML = buildPrintSummary(year, note);
+  area.classList.add('active');
+  document.getElementById('printToolbar').style.display = 'flex';
+  area.scrollIntoView({ behavior: 'smooth' });
+});
+document.getElementById('printNowBtn').addEventListener('click', () => window.print());
+document.getElementById('closePreviewBtn').addEventListener('click', () => {
+  document.getElementById('printArea').classList.remove('active');
+  document.getElementById('printArea').innerHTML = '';
+  document.getElementById('printToolbar').style.display = 'none';
+});
+
+// ================= events: backup =================
+document.getElementById('exportBtn').addEventListener('click', exportBackup);
+document.getElementById('undoBtn').addEventListener('click', performUndo);
+document.getElementById('redoBtn').addEventListener('click', performRedo);
+document.getElementById('tripSearch').addEventListener('input', renderTable);
+document.getElementById('expSearch').addEventListener('input', renderExpenseTable);
+document.getElementById('yearFilterToggle').addEventListener('change', () => { renderTable(); renderLegTable(); populateExpTripSelect(); renderExpenseTable(); renderGapWarnings(); renderNeedsPassList(); renderDuplicateWarnings(); });
+document.getElementById('importBtn').addEventListener('click', () => document.getElementById('importFile').click());
+document.getElementById('importFile').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (file) await importBackupFile(file);
+  e.target.value = '';
+});
+
+// ================= init =================
+let __ledgerInitialized = false;
+async function initLedger() {
+  if (__ledgerInitialized) return;
+  __ledgerInitialized = true;
+  const today = new Date().toISOString().slice(0, 10);
+  document.getElementById('asof').value = today;
+  populateCountrySelects();
+  await loadAll();
+  document.getElementById('loadstatus').textContent = storageMode === 'firebase' ? 'live \u2014 saved to Firebase' : 'no connection to Firebase \u2014 check your config and internet connection';
+  if (trips.length === 0 && legs.length === 0 && expenses.length === 0) document.getElementById('freshFileBanner').style.display = 'block';
+  renderAll();
+  populateCloseYearSelect();
+  updateUndoButton();
+  updateRedoButton();
+  updateYearFilterLabel();
+  if (legs.length > 0) buildTripsFromLegs();
+  startLiveSync();
+}
+window.addEventListener('ledger-signed-in', initLedger);
+if (window.__ledgerSignedInFlag) initLedger();
+</script>
+</body>
+</html>
