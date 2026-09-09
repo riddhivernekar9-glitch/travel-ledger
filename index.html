@@ -477,12 +477,12 @@ const firebaseConfig = {
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-import { getFirestore, doc, getDoc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import { getFirestore, doc, getDoc, setDoc, deleteField, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 const fbApp = initializeApp(firebaseConfig);
 const auth = getAuth(fbApp);
 const db = getFirestore(fbApp);
-window.__fb = { auth, db, doc, getDoc, setDoc, onSnapshot, signOut };
+window.__fb = { auth, db, doc, getDoc, setDoc, deleteField, onSnapshot, signOut };
 
 document.getElementById('loginForm').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -532,7 +532,7 @@ let calYear = new Date().getUTCFullYear();
 let calMonth = new Date().getUTCMonth();
 let undoStack = [];
 let redoStack = [];
-const UNDO_LIMIT = 20;
+const UNDO_LIMIT = 6;
 
 // ================= date helpers =================
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
@@ -605,14 +605,29 @@ const SHARED_DOC_PATH = ['ledgerData', 'shared'];
 let firestoreCache = null;
 let suppressNextSnapshotReload = false;
 
+const UNDO_DOC_PATH = ['ledgerData', 'undoRedo'];
+let undoRedoCache = null;
+
 async function getFirestoreDoc() {
   const { db, doc, getDoc } = window.__fb;
   const snap = await getDoc(doc(db, ...SHARED_DOC_PATH));
   return snap.exists() ? snap.data() : {};
 }
+async function getUndoRedoDoc() {
+  const { db, doc, getDoc } = window.__fb;
+  const snap = await getDoc(doc(db, ...UNDO_DOC_PATH));
+  return snap.exists() ? snap.data() : {};
+}
+
+function isUndoRedoKey(key) { return key === 'undo-stack' || key === 'redo-stack'; }
 
 async function storageGetRaw(key) {
   try {
+    if (isUndoRedoKey(key)) {
+      if (!undoRedoCache) undoRedoCache = await getUndoRedoDoc();
+      storageMode = 'firebase';
+      return undoRedoCache[key] != null ? undoRedoCache[key] : null;
+    }
     if (!firestoreCache) firestoreCache = await getFirestoreDoc();
     storageMode = 'firebase';
     return firestoreCache[key] != null ? firestoreCache[key] : null;
@@ -621,6 +636,16 @@ async function storageGetRaw(key) {
 async function storageSetRaw(key, value) {
   try {
     const { db, doc, setDoc } = window.__fb;
+    if (isUndoRedoKey(key)) {
+      // Undo/redo history lives in its OWN document, completely separate from trips/legs/expenses.
+      // This is on purpose: undo history can grow large, and it must never be able to block or
+      // slow down saving your actual travel data, even if it ever hits its own size limit.
+      if (!undoRedoCache) undoRedoCache = await getUndoRedoDoc();
+      undoRedoCache[key] = value;
+      await setDoc(doc(db, ...UNDO_DOC_PATH), { [key]: value }, { merge: true });
+      storageMode = 'firebase';
+      return true;
+    }
     if (!firestoreCache) firestoreCache = await getFirestoreDoc();
     firestoreCache[key] = value;
     suppressNextSnapshotReload = true;
@@ -2004,12 +2029,32 @@ document.getElementById('importFile').addEventListener('change', async (e) => {
 
 // ================= init =================
 let __ledgerInitialized = false;
+async function cleanupLegacyUndoFields() {
+  // One-time fix for anyone who used the app before undo/redo history was moved to its own
+  // document \u2014 the old undo-stack/redo-stack fields, sitting inside the SAME document as
+  // trips/legs/expenses, could grow past Firestore's 1 MiB document limit and silently block
+  // every future save. This removes them from the main document; they now live separately.
+  try {
+    const { db, doc, getDoc, setDoc, deleteField } = window.__fb;
+    const ref = doc(db, ...SHARED_DOC_PATH);
+    const snap = await getDoc(ref);
+    if (snap.exists()) {
+      const data = snap.data();
+      if (data['undo-stack'] != null || data['redo-stack'] != null) {
+        await setDoc(ref, { 'undo-stack': deleteField(), 'redo-stack': deleteField() }, { merge: true });
+        if (firestoreCache) { delete firestoreCache['undo-stack']; delete firestoreCache['redo-stack']; }
+      }
+    }
+  } catch (e) { /* best-effort cleanup; a failure here shouldn't block the app from loading */ }
+}
+
 async function initLedger() {
   if (__ledgerInitialized) return;
   __ledgerInitialized = true;
   const today = new Date().toISOString().slice(0, 10);
   document.getElementById('asof').value = today;
   populateCountrySelects();
+  await cleanupLegacyUndoFields();
   await loadAll();
   document.getElementById('loadstatus').textContent = storageMode === 'firebase' ? 'live \u2014 saved to Firebase' : 'no connection to Firebase \u2014 check your config and internet connection';
   if (trips.length === 0 && legs.length === 0 && expenses.length === 0) document.getElementById('freshFileBanner').style.display = 'block';
