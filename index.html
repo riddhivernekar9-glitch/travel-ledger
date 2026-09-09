@@ -1233,7 +1233,9 @@ function resetTripForm() {
   document.getElementById('exitDate').value = '';
   document.getElementById('note').value = '';
   document.getElementById('evidenceOnly').checked = false;
-  document.getElementById('tripSubmitBtn').textContent = 'Add trip';
+  const submitBtn = document.getElementById('tripSubmitBtn');
+  submitBtn.textContent = 'Add trip';
+  submitBtn.disabled = false; submitBtn.style.opacity = '1'; submitBtn.style.cursor = 'pointer';
   document.getElementById('tripCancelBtn').style.display = 'none';
 }
 
@@ -1730,7 +1732,14 @@ async function upgradeReceiptBackedTrips() {
   return upgradedCount;
 }
 document.getElementById('upgradeAllBtn').addEventListener('click', async () => {
+  const btn = document.getElementById('upgradeAllBtn');
+  if (btn.disabled) return; // already working, ignore a second click
   const statusEl = document.getElementById('backfillStatus');
+  btn.disabled = true;
+  btn.style.opacity = '0.6';
+  btn.style.cursor = 'wait';
+  const originalText = btn.textContent;
+  btn.textContent = 'Working\u2026 please wait';
   statusEl.textContent = 'Working\u2026';
   statusEl.style.color = 'var(--ink-soft)';
   const tightened = await backfillTripsFromHotelBills();
@@ -1740,6 +1749,10 @@ document.getElementById('upgradeAllBtn').addEventListener('click', async () => {
   if (upgraded > 0) parts.push(upgraded + ' trip(s) upgraded to fully confirmed, since they already have bills attached');
   statusEl.textContent = parts.length > 0 ? '\u2713 ' + parts.join('; ') + '.' : 'Nothing to do \u2014 every trip is already either confirmed or has no evidence to upgrade from.';
   statusEl.style.color = parts.length > 0 ? 'var(--green)' : 'var(--ink-soft)';
+  btn.disabled = false;
+  btn.style.opacity = '1';
+  btn.style.cursor = 'pointer';
+  btn.textContent = originalText;
 });
 
 function reassignOrphanedExpenses() {
@@ -1822,6 +1835,8 @@ function resolveOverlaps(newTrip, restrictToEvidenceOnly) {
 
 document.getElementById('entryForm').addEventListener('submit', async (e) => {
   e.preventDefault();
+  const submitBtn = document.getElementById('tripSubmitBtn');
+  if (submitBtn.disabled) return; // already saving, ignore a second click
   const editId = document.getElementById('tripEditId').value;
   const country = document.getElementById('country').value;
   const region = mapCountryToRegion(country);
@@ -1832,44 +1847,54 @@ document.getElementById('entryForm').addEventListener('submit', async (e) => {
   const evidenceOnly = document.getElementById('evidenceOnly').checked;
   if (!entry || !exit) return;
   if (parseDate(exit) < parseDate(entry)) { alert('Exit date is before entry date.'); return; }
+  submitBtn.disabled = true; submitBtn.style.opacity = '0.6'; submitBtn.style.cursor = 'wait';
+  const origBtnText = submitBtn.textContent; submitBtn.textContent = 'Saving\u2026';
   if (editId) {
     const entryMs = parseDate(entry), exitMs = parseDate(exit);
     const uncovered = expenses.filter(ex => ex.tripId === editId && ex.date && (parseDate(ex.date) < entryMs || parseDate(ex.date) > exitMs));
     if (uncovered.length > 0) {
       const proceed = confirm('This trip currently has ' + uncovered.length + ' bill(s) dated outside the new ' + entry + ' to ' + exit + ' range (e.g. ' + uncovered[0].vendor + ' on ' + uncovered[0].date + '). Those days would go back to showing as uncovered on the calendar. Save this change anyway?');
-      if (!proceed) return;
+      if (!proceed) {
+        submitBtn.disabled = false; submitBtn.style.opacity = '1'; submitBtn.style.cursor = 'pointer'; submitBtn.textContent = origBtnText;
+        return;
+      }
     }
   }
   await pushUndo();
-  let savedTrip;
-  if (editId) {
-    const idx = trips.findIndex(t => t.id === editId);
-    if (idx > -1) {
-      const newId = editId.startsWith('derived-') ? uid() : editId;
-      savedTrip = { id: newId, country, region, state, entry, exit, note, evidenceOnly };
-      trips[idx] = savedTrip;
+  try {
+    let savedTrip;
+    if (editId) {
+      const idx = trips.findIndex(t => t.id === editId);
+      if (idx > -1) {
+        const newId = editId.startsWith('derived-') ? uid() : editId;
+        savedTrip = { id: newId, country, region, state, entry, exit, note, evidenceOnly };
+        trips[idx] = savedTrip;
+      }
+    } else {
+      savedTrip = { id: uid(), country, region, state, entry, exit, note, evidenceOnly };
+      trips.push(savedTrip);
     }
-  } else {
-    savedTrip = { id: uid(), country, region, state, entry, exit, note, evidenceOnly };
-    trips.push(savedTrip);
-  }
-  const adjustedCount = savedTrip ? resolveOverlaps(savedTrip, !!savedTrip.evidenceOnly) : 0;
-  await saveTrips();
-  if (adjustedCount > 0) await saveExpenses();
-  resetTripForm();
-  renderAll();
-  populateCloseYearSelect();
-  if (adjustedCount > 0) {
-    const statusEl = document.getElementById('tripFormStatus') || (() => {
-      const el = document.createElement('div');
-      el.id = 'tripFormStatus';
-      el.className = 'hint';
-      el.style.marginTop = '8px';
-      document.getElementById('entryForm').insertAdjacentElement('afterend', el);
-      return el;
-    })();
-    statusEl.style.color = 'var(--green)';
-    statusEl.textContent = '\u2713 Trip added \u2014 automatically adjusted ' + adjustedCount + ' existing trip(s) that overlapped these dates, so nothing double-counts.';
+    const adjustedCount = savedTrip ? resolveOverlaps(savedTrip, !!savedTrip.evidenceOnly) : 0;
+    await saveTrips();
+    if (adjustedCount > 0) await saveExpenses();
+    resetTripForm();
+    renderAll();
+    populateCloseYearSelect();
+    if (adjustedCount > 0) {
+      const statusEl = document.getElementById('tripFormStatus') || (() => {
+        const el = document.createElement('div');
+        el.id = 'tripFormStatus';
+        el.className = 'hint';
+        el.style.marginTop = '8px';
+        document.getElementById('entryForm').insertAdjacentElement('afterend', el);
+        return el;
+      })();
+      statusEl.style.color = 'var(--green)';
+      statusEl.textContent = '\u2713 Trip added \u2014 automatically adjusted ' + adjustedCount + ' existing trip(s) that overlapped these dates, so nothing double-counts.';
+    }
+  } finally {
+    submitBtn.disabled = false; submitBtn.style.opacity = '1'; submitBtn.style.cursor = 'pointer';
+    if (submitBtn.textContent === 'Saving\u2026') submitBtn.textContent = origBtnText;
   }
 });
 document.getElementById('tripCancelBtn').addEventListener('click', resetTripForm);
@@ -1878,6 +1903,10 @@ document.getElementById('asof').addEventListener('change', renderBoard);
 // ================= events: flight legs =================
 document.getElementById('legForm').addEventListener('submit', async (e) => {
   e.preventDefault();
+  const submitBtn = document.getElementById('legSubmitBtn');
+  if (submitBtn.disabled) return; // already saving, ignore a second click
+  submitBtn.disabled = true; submitBtn.style.opacity = '0.6'; submitBtn.style.cursor = 'wait';
+  const origBtnText = submitBtn.textContent; submitBtn.textContent = 'Saving\u2026';
   await pushUndo();
   const statusEl = document.getElementById('legFormStatus');
   try {
@@ -1907,6 +1936,9 @@ document.getElementById('legForm').addEventListener('submit', async (e) => {
   } catch (err) {
     statusEl.textContent = 'Something went wrong adding this flight: ' + err.message + ' (please screenshot this message)';
     statusEl.style.color = 'var(--red)';
+  } finally {
+    submitBtn.disabled = false; submitBtn.style.opacity = '1'; submitBtn.style.cursor = 'pointer';
+    if (submitBtn.textContent === 'Saving\u2026') submitBtn.textContent = origBtnText;
   }
 });
 document.getElementById('legCancelBtn').addEventListener('click', resetLegForm);
@@ -1929,6 +1961,10 @@ document.getElementById('calNext').addEventListener('click', () => { calMonth++;
 // ================= events: expenses =================
 document.getElementById('expenseForm').addEventListener('submit', async (e) => {
   e.preventDefault();
+  const submitBtn = document.getElementById('expSubmitBtn');
+  if (submitBtn.disabled) return; // already saving, ignore a second click
+  submitBtn.disabled = true; submitBtn.style.opacity = '0.6'; submitBtn.style.cursor = 'wait';
+  const origBtnText = submitBtn.textContent; submitBtn.textContent = 'Saving\u2026';
   await pushUndo();
   const statusEl = document.getElementById('expFormStatus');
   try {
@@ -1993,6 +2029,9 @@ document.getElementById('expenseForm').addEventListener('submit', async (e) => {
   } catch (err) {
     statusEl.textContent = 'Something went wrong saving this bill: ' + err.message + ' (please screenshot this message)';
     statusEl.style.color = 'var(--red)';
+  } finally {
+    submitBtn.disabled = false; submitBtn.style.opacity = '1'; submitBtn.style.cursor = 'pointer';
+    if (submitBtn.textContent === 'Saving\u2026') submitBtn.textContent = origBtnText; // only if reset didn't already set it
   }
 });
 
