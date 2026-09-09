@@ -973,7 +973,7 @@ function buildFlightDayRoute(dateStr) {
 
 function dayExpenseTags(dateStr) {
   const dayMs = parseDate(dateStr);
-  return expenses.filter(ex => {
+  const raw = expenses.filter(ex => {
     if (!ex.date) return false;
     const start = parseDate(ex.date);
     let end = ex.endDate ? parseDate(ex.endDate) : start;
@@ -984,6 +984,7 @@ function dayExpenseTags(dateStr) {
     if (ex.category === 'Train' && ex.fromPlace && ex.toPlace) return 'Train: ' + ex.fromPlace + ' \u2192 ' + ex.toPlace;
     return ex.category;
   });
+  return [...new Set(raw)]; // one mention per category per day, however many bills there actually were
 }
 
 function expandTripCardAndEdit(tripId) {
@@ -1077,13 +1078,17 @@ function renderCalendar() {
     } else if (trip && trip.evidenceOnly) {
       // Trip exists but is only backed by a receipt/bill, not a boarding pass or hotel booking.
       // Flag it boldly on the calendar, same as an unmatched bill, so the weak evidence is obvious.
+      // If a real flight ALSO happens to be logged for this exact day, show that too \u2014 it's
+      // stronger evidence and shouldn't be hidden just because this trip is still marked receipt-only.
+      const evOnlyRoute = buildFlightDayRoute(dateStr);
       const noteText = trip.note ? ' (' + trip.note + ')' : '';
-      cell.title = (trip.country || trip.region) + (trip.state ? ', ' + trip.state : '') + ' \u2014 receipt-only evidence' + noteText + tagText;
+      const flightPrefix = evOnlyRoute ? '\u2708 ' + evOnlyRoute + ' \u2014 ' : '';
+      cell.title = flightPrefix + (trip.country || trip.region) + (trip.state ? ', ' + trip.state : '') + ' \u2014 receipt-only evidence' + noteText + tagText;
       cell.style.background = 'var(--alert)';
       cell.style.borderColor = 'var(--alert)';
       cell.style.borderWidth = '2px';
       cell.innerHTML = '<span class="dnum" style="color:#fff;">' + d + '</span>' +
-        '<span class="dcountry" style="color:#fff;">&#9888; ' + (trip.country || trip.region) + noteText + tagText + '</span>';
+        '<span class="dcountry" style="color:#fff;">' + (evOnlyRoute ? '\u2708 ' + evOnlyRoute + ' \u2014 ' : '') + '&#9888; ' + (trip.country || trip.region) + noteText + tagText + '</span>';
     } else if (trip) {
       const colors = REGION_COLORS[trip.region] || REGION_COLORS.Other;
       const route = buildFlightDayRoute(dateStr);
