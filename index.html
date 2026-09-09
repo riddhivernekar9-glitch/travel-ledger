@@ -67,7 +67,7 @@
   .cal-day { aspect-ratio: 1 / 0.85; border-radius: 2px; padding: 4px 5px; font-family: "Courier New", monospace; font-size: 10px; border: 1px solid var(--line); background: var(--paper); display: flex; flex-direction: column; justify-content: space-between; overflow: hidden; }
   .cal-day.has-entry { cursor: pointer; }
   .cal-day.has-entry:hover { outline: 2px solid var(--ink); outline-offset: -2px; }
-  tr.row-highlight { background: var(--amber-bg) !important; outline: 2px solid var(--amber); }
+  tr.row-highlight, .trip-card.row-highlight { background: var(--amber-bg) !important; outline: 2px solid var(--amber); }
   .cal-day.empty { border: none; background: transparent; }
   .cal-day .dnum { font-size: 10px; color: var(--ink-soft); }
   .cal-day .dcountry { font-size: 9px; line-height: 1.2; font-weight: bold; }
@@ -325,10 +325,8 @@
     <input type="text" id="tripSearch" placeholder="Filter by country, state, or notes&hellip;" style="width:100%; font-family:'Courier New',monospace; font-size:13px; padding:8px; border:1px solid var(--line-strong); border-radius:2px; background:var(--paper); color:var(--ink); margin-bottom:12px;">
     <div id="billMismatchWarnings"></div>
     <div id="dupWarnings"></div>
-    <table class="ledger">
-      <thead><tr><th>Country</th><th>State</th><th>Entry</th><th>Exit</th><th>Days</th><th>Notes</th><th></th></tr></thead>
-      <tbody id="tripBody"></tbody>
-    </table>
+    <p class="hint" style="margin-bottom:8px;">Click any trip to see its bills and evidence in one place, without scrolling through the full bill list below.</p>
+    <div id="tripBody"></div>
   </div>
 
   <div class="step">
@@ -988,6 +986,18 @@ function dayExpenseTags(dateStr) {
   });
 }
 
+function expandTripCardAndEdit(tripId) {
+  document.getElementById('tripSearch').value = '';
+  renderTable();
+  const card = document.querySelector('[data-trip-row="' + tripId + '"]');
+  if (!card) return;
+  const header = card.querySelector('.trip-card-header');
+  const bodyDiv = card.querySelector('.trip-card-body');
+  if (bodyDiv.style.display !== 'block') header.click(); // expand it, which renders the edit button
+  const editBtn = bodyDiv.querySelector('[data-trip-edit]');
+  if (editBtn) editBtn.click();
+}
+
 function jumpToDate(dateStr) {
   const dayMs = parseDate(dateStr);
   const matchingLegs = legs.filter(l => l.depDate === dateStr || l.arrDate === dateStr);
@@ -1006,8 +1016,17 @@ function jumpToDate(dateStr) {
     if (row) rowsToHighlight.push(row);
   });
   matchingTrips.forEach(t => {
-    const row = document.querySelector('tr[data-trip-row="' + t.id + '"]');
+    const row = document.querySelector('[data-trip-row="' + t.id + '"]');
     if (row) rowsToHighlight.push(row);
+  });
+  // Bills live nested inside their trip's card, only rendered once that card is expanded \u2014
+  // so open the relevant card(s) first, then the bill rows will actually exist to be found.
+  const tripIdsToExpand = [...new Set(matchingExpenses.map(ex => ex.tripId))];
+  tripIdsToExpand.forEach(tripId => {
+    const card = document.querySelector('[data-trip-row="' + tripId + '"]');
+    if (!card) return;
+    const bodyDiv = card.querySelector('.trip-card-body');
+    if (bodyDiv && bodyDiv.style.display !== 'block') card.querySelector('.trip-card-header').click();
   });
   matchingExpenses.forEach(ex => {
     const row = document.querySelector('tr[data-exp-row="' + ex.id + '"]');
@@ -1016,7 +1035,7 @@ function jumpToDate(dateStr) {
 
   // Clear any highlight left over from a previous click, everywhere on the page,
   // so only the currently selected day's rows stay lit up.
-  document.querySelectorAll('tr.row-highlight').forEach(row => row.classList.remove('row-highlight'));
+  document.querySelectorAll('tr.row-highlight, .trip-card.row-highlight').forEach(row => row.classList.remove('row-highlight'));
 
   if (rowsToHighlight.length === 0) return;
 
@@ -1170,6 +1189,26 @@ function updateYearFilterLabel() {
   if (label) label.innerHTML = 'Only show flights, trips, and bills from <strong>' + calYear + '</strong> in the lists below (unticking shows every year at once)';
 }
 
+function refreshTripCardDisplay(tripId) {
+  const card = document.querySelector('[data-trip-row="' + tripId + '"]');
+  if (!card) return;
+  const t = trips.find(x => x.id === tripId);
+  if (!t) return;
+  const billCount = expenses.filter(ex => ex.tripId === t.id).length;
+  const badges = (t.evidenceOnly ? ' <span style="color:var(--alert); font-weight:bold;">&#9888; receipt-only</span>' : '') +
+    (t.derived ? ' <span style="color:var(--green); font-weight:bold;">&#9992; boarding pass</span>' : '');
+  const header = card.querySelector('.trip-card-header');
+  const arrow = header.querySelector('.trip-card-arrow').outerHTML;
+  header.innerHTML =
+    '<span><strong>' + (t.country || '') + '</strong>' + (t.state ? ', ' + t.state : '') +
+    ' <span style="color:var(--ink-soft);">' + t.entry + ' to ' + t.exit + ' (' + daysInclusive(t.entry, t.exit) + ' day' + (daysInclusive(t.entry, t.exit) === 1 ? '' : 's') + ')</span>' +
+    (t.note ? ' <span style="color:var(--ink-soft);">\u2013 ' + t.note + '</span>' : '') + badges +
+    (billCount > 0 ? ' <span style="color:var(--ink-soft);">&middot; ' + billCount + ' bill' + (billCount === 1 ? '' : 's') + '</span>' : '') +
+    '</span>' + arrow;
+  const bodyDiv = card.querySelector('.trip-card-body');
+  if (bodyDiv && bodyDiv.style.display === 'block') renderTripCardBody(bodyDiv, t);
+}
+
 function renderTable() {
   const body = document.getElementById('tripBody');
   body.innerHTML = '';
@@ -1184,45 +1223,124 @@ function renderTable() {
     ));
   }
   if (filtered.length === 0) {
-    body.innerHTML = '<tr class="empty-row"><td colspan="7">' + (trips.length === 0 ? 'No trips yet.' : (searchTerm ? 'No trips match that search.' : 'No trips in ' + calYear + ' \u2014 untick the year filter above to see other years.')) + '</td></tr>';
+    body.innerHTML = '<p class="hint">' + (trips.length === 0 ? 'No trips yet.' : (searchTerm ? 'No trips match that search.' : 'No trips in ' + calYear + ' \u2014 untick the year filter above to see other years.')) + '</p>';
     return;
   }
   const sorted = [...filtered].sort((a, b) => parseDate(a.entry) - parseDate(b.entry));
   sorted.forEach(t => {
-    const tr = document.createElement('tr');
-    tr.setAttribute('data-trip-row', t.id);
-    const noteDisplay = (t.note || '') + (t.evidenceOnly ? ' <span style="color:var(--alert); font-weight:bold;">&#9888; receipt-only</span>' : '') + (t.derived ? ' <span style="color:var(--green); font-weight:bold;">&#9992; boarding pass</span>' : '');
-    tr.innerHTML = '<td>' + (t.country || '') + '</td><td>' + (t.state || '') + '</td><td>' + t.entry + '</td><td>' + t.exit + '</td><td>' + daysInclusive(t.entry, t.exit) + '</td><td>' + noteDisplay + '</td>' +
-      '<td><button class="edit-btn" data-id="' + t.id + '">edit</button><button class="del-btn" data-id="' + t.id + '">remove</button></td>';
-    body.appendChild(tr);
-  });
-  body.querySelectorAll('.edit-btn').forEach(btn => {
-    btn.onclick = () => {
-      const t = trips.find(x => x.id === btn.dataset.id);
-      if (!t) return;
-      document.getElementById('tripEditId').value = t.id;
-      document.getElementById('country').value = t.country || 'United Kingdom';
-      document.getElementById('state').value = t.state || '';
-      document.getElementById('entryDate').value = t.entry;
-      document.getElementById('exitDate').value = t.exit;
-      document.getElementById('note').value = t.note || '';
-      document.getElementById('evidenceOnly').checked = !!t.evidenceOnly;
-      document.getElementById('tripSubmitBtn').textContent = 'Update trip';
-      document.getElementById('tripCancelBtn').style.display = 'inline-block';
-      document.getElementById('entryForm').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const card = document.createElement('div');
+    card.setAttribute('data-trip-row', t.id);
+    card.className = 'trip-card';
+    card.style.cssText = 'border:1px solid var(--line); border-radius:4px; margin-bottom:8px; background:var(--paper-card); overflow:hidden;';
+    const badges = (t.evidenceOnly ? ' <span style="color:var(--alert); font-weight:bold;">&#9888; receipt-only</span>' : '') +
+      (t.derived ? ' <span style="color:var(--green); font-weight:bold;">&#9992; boarding pass</span>' : '');
+    const billCount = expenses.filter(ex => ex.tripId === t.id).length;
+    const header = document.createElement('div');
+    header.className = 'trip-card-header';
+    header.style.cssText = 'padding:10px 12px; cursor:pointer; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px;';
+    header.innerHTML =
+      '<span><strong>' + (t.country || '') + '</strong>' + (t.state ? ', ' + t.state : '') +
+      ' <span style="color:var(--ink-soft);">' + t.entry + ' to ' + t.exit + ' (' + daysInclusive(t.entry, t.exit) + ' day' + (daysInclusive(t.entry, t.exit) === 1 ? '' : 's') + ')</span>' +
+      (t.note ? ' <span style="color:var(--ink-soft);">\u2013 ' + t.note + '</span>' : '') + badges +
+      (billCount > 0 ? ' <span style="color:var(--ink-soft);">&middot; ' + billCount + ' bill' + (billCount === 1 ? '' : 's') + '</span>' : '') +
+      '</span><span class="trip-card-arrow" style="font-family:monospace;">&#9656;</span>';
+    const bodyDiv = document.createElement('div');
+    bodyDiv.className = 'trip-card-body';
+    bodyDiv.style.cssText = 'display:none; padding:0 12px 12px; border-top:1px solid var(--line);';
+    card.appendChild(header);
+    card.appendChild(bodyDiv);
+    body.appendChild(card);
+
+    header.onclick = () => {
+      const isOpen = bodyDiv.style.display === 'block';
+      bodyDiv.style.display = isOpen ? 'none' : 'block';
+      header.querySelector('.trip-card-arrow').innerHTML = isOpen ? '&#9656;' : '&#9662;';
+      if (!isOpen) renderTripCardBody(bodyDiv, t);
     };
   });
-  body.querySelectorAll('.del-btn').forEach(btn => {
+}
+function renderTripCardBody(container, t) {
+  const bills = expenses.filter(ex => ex.tripId === t.id).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  let billsHtml = bills.length === 0
+    ? '<p class="hint">No bills attached to this trip yet.</p>'
+    : '<table class="ledger" style="margin:8px 0;"><thead><tr><th>Type</th><th>Vendor</th><th>Date</th><th>Amount</th><th></th></tr></thead><tbody>' +
+      bills.map(ex => {
+        const routeText = (ex.category === 'Train' && ex.fromPlace && ex.toPlace) ? ' (' + ex.fromPlace + ' \u2192 ' + ex.toPlace + ')' : '';
+        const uaeBadge = ex.uaeResidence ? ' <span style="color:#a3312c; font-weight:bold;">&#127968;</span>' : '';
+        const dateCell = ex.date ? (ex.endDate && ex.endDate !== ex.date ? ex.date + ' to ' + ex.endDate : ex.date) : '';
+        return '<tr data-exp-row="' + ex.id + '"><td>' + ex.category + '</td><td>' + (ex.vendor || '') + routeText + uaeBadge + '</td><td>' + dateCell + '</td>' +
+          '<td>' + (ex.amount != null ? Number(ex.amount).toFixed(2) + ' ' + (ex.currency || '') : '') + '</td>' +
+          '<td><button class="edit-btn" data-bill-id="' + ex.id + '">edit</button><button class="del-btn" data-bill-id="' + ex.id + '">remove</button></td></tr>';
+      }).join('') + '</tbody></table>';
+  container.innerHTML =
+    '<div style="display:flex; gap:8px; margin:10px 0;">' +
+      '<button class="edit-btn" data-trip-edit="' + t.id + '">edit this trip</button>' +
+      '<button class="btn-secondary" data-add-bill="' + t.id + '">+ add a bill to this trip</button>' +
+      '<button class="del-btn" data-trip-del="' + t.id + '">remove this trip</button>' +
+    '</div>' + billsHtml;
+
+  container.querySelector('[data-trip-edit]').onclick = () => {
+    document.getElementById('tripEditId').value = t.id;
+    document.getElementById('country').value = t.country || 'United Kingdom';
+    document.getElementById('state').value = t.state || '';
+    document.getElementById('entryDate').value = t.entry;
+    document.getElementById('exitDate').value = t.exit;
+    document.getElementById('note').value = t.note || '';
+    document.getElementById('evidenceOnly').checked = !!t.evidenceOnly;
+    document.getElementById('tripSubmitBtn').textContent = 'Update trip';
+    document.getElementById('tripCancelBtn').style.display = 'inline-block';
+    document.getElementById('entryForm').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  };
+  container.querySelector('[data-add-bill]').onclick = () => {
+    resetExpenseForm();
+    populateExpTripSelect();
+    document.getElementById('expTrip').value = t.id;
+    updateUaeResidenceVisibility();
+    document.getElementById('expenseForm').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  };
+  container.querySelector('[data-trip-del]').onclick = async () => {
+    await pushUndo();
+    trips = trips.filter(x => x.id !== t.id);
+    const hadExpenses = expenses.some(ex => ex.tripId === t.id);
+    expenses = expenses.filter(ex => ex.tripId !== t.id);
+    await saveTrips();
+    if (hadExpenses) await saveExpenses();
+    if (document.getElementById('tripEditId').value === t.id) resetTripForm();
+    renderAll();
+  };
+  container.querySelectorAll('[data-bill-id].edit-btn').forEach(btn => {
+    btn.onclick = () => {
+      const ex = expenses.find(x => x.id === btn.dataset.billId);
+      if (!ex) return;
+      document.getElementById('expEditId').value = ex.id;
+      populateExpTripSelect();
+      const tripSel = document.getElementById('expTrip');
+      tripSel.value = ex.tripId;
+      updateUaeResidenceVisibility();
+      document.getElementById('expUaeResidence').checked = !!ex.uaeResidence;
+      document.getElementById('expCategory').value = ex.category;
+      updateCategoryFieldVisibility();
+      document.getElementById('expVendor').value = ex.vendor || '';
+      document.getElementById('expDate').value = ex.date || '';
+      document.getElementById('expEndDate').value = ex.endDate || '';
+      document.getElementById('expFrom').value = ex.fromPlace || '';
+      document.getElementById('expTo').value = ex.toPlace || '';
+      document.getElementById('expAmount').value = ex.amount != null ? ex.amount : '';
+      document.getElementById('expCurrency').value = ex.currency || '';
+      document.getElementById('expSubmitBtn').textContent = 'Update bill';
+      document.getElementById('expCancelBtn').style.display = 'inline-block';
+      document.getElementById('expenseForm').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    };
+  });
+  container.querySelectorAll('[data-bill-id].del-btn').forEach(btn => {
     btn.onclick = async () => {
       await pushUndo();
-      const removedId = btn.dataset.id;
-      trips = trips.filter(t => t.id !== removedId);
-      const hadExpenses = expenses.some(ex => ex.tripId === removedId);
-      expenses = expenses.filter(ex => ex.tripId !== removedId);
-      await saveTrips();
-      if (hadExpenses) await saveExpenses();
-      if (document.getElementById('tripEditId').value === removedId) resetTripForm();
-      renderAll();
+      expenses = expenses.filter(ex => ex.id !== btn.dataset.billId);
+      await saveExpenses();
+      renderExpenseTable();
+      renderCalendar();
+      renderTripBillMismatchWarnings();
+      renderTripCardBody(container, t); // refresh just this card's bill list in place
     };
   });
 }
@@ -1463,7 +1581,7 @@ function renderExpenseTable() {
     };
   });
   body.querySelectorAll('.del-btn').forEach(btn => {
-    btn.onclick = async () => { await pushUndo(); expenses = expenses.filter(ex => ex.id !== btn.dataset.id); await saveExpenses(); renderExpenseTable(); renderCalendar(); renderTripBillMismatchWarnings(); };
+    btn.onclick = async () => { await pushUndo(); const ex = expenses.find(x => x.id === btn.dataset.id); const tid = ex ? ex.tripId : null; expenses = expenses.filter(ex => ex.id !== btn.dataset.id); await saveExpenses(); renderExpenseTable(); renderCalendar(); renderTripBillMismatchWarnings(); if (tid) refreshTripCardDisplay(tid); };
   });
 }
 
@@ -1608,12 +1726,7 @@ function renderTripBillMismatchWarnings() {
   }).join('<br>');
   el.innerHTML = '<div class="print-note-box" style="margin-bottom:12px; border-color:var(--alert); background:#f5e0ee; color:#631253;"><strong>&#9888; ' + mismatches.length + ' trip(s) have bills sitting outside their own date range \u2014 likely a shortened/corrupted trip:</strong><br>' + rows + '</div>';
   el.querySelectorAll('[data-mismatch-id]').forEach(btn => {
-    btn.onclick = () => {
-      document.getElementById('tripSearch').value = '';
-      renderTable();
-      const editBtn = document.querySelector('tr[data-trip-row="' + btn.dataset.mismatchId + '"] .edit-btn');
-      if (editBtn) editBtn.click();
-    };
+    btn.onclick = () => expandTripCardAndEdit(btn.dataset.mismatchId);
   });
 }
 function findDuplicateTrips() {
@@ -1670,12 +1783,7 @@ function renderNeedsPassList() {
   ).join('');
   el.innerHTML = '<table class="ledger"><thead><tr><th>Country</th><th>Entry</th><th>Exit</th><th>Notes</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>';
   el.querySelectorAll('[data-needpass-id]').forEach(btn => {
-    btn.onclick = () => {
-      document.getElementById('tripSearch').value = '';
-      renderTable();
-      const editBtn = document.querySelector('tr[data-trip-row="' + btn.dataset.needpassId + '"] .edit-btn');
-      if (editBtn) editBtn.click();
-    };
+    btn.onclick = () => expandTripCardAndEdit(btn.dataset.needpassId);
   });
 }
 
@@ -2020,6 +2128,8 @@ document.getElementById('expenseForm').addEventListener('submit', async (e) => {
     renderTripBillMismatchWarnings();
     if (createdNewTrip) {
       renderTable(); renderNeedsPassList(); renderDuplicateWarnings(); populateExpTripSelect();
+    } else {
+      refreshTripCardDisplay(tripId);
     }
     const newTripNote = newTripSupersededCount > 0 ? ' A new trip was created for this bill (' + newTripSupersededCount + ' receipt-only entr' + (newTripSupersededCount === 1 ? 'y was' : 'ies were') + ' merged into it).' : '';
     statusEl.textContent = editId
