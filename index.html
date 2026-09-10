@@ -1094,9 +1094,13 @@ function renderCalendar() {
       const colors = REGION_COLORS[trip.region] || REGION_COLORS.Other;
       const route = buildFlightDayRoute(dateStr);
       const isFlightDay = !!route;
-      const stateText = trip.state ? ' (' + trip.state + ')' : '';
-      cell.title = (trip.country || trip.region) + (trip.state ? ', ' + trip.state : '') +
-        (route ? ' (' + route + ')' : (trip.note ? ' \u2013 last confirmed city: ' + trip.note : '')) + tagText;
+      // A manually-typed trip keeps its city/area in "state" (e.g. "Miami", "Dolomites").
+      // A trip built from a boarding pass keeps the arrival city in "note" instead \u2014 "state"
+      // is always blank there. Show whichever one actually has something, state taking priority.
+      const placeText = trip.state || trip.note || '';
+      const stateText = placeText ? ' (' + placeText + ')' : '';
+      cell.title = (trip.country || trip.region) + (placeText ? ', ' + placeText : '') +
+        (route ? ' (' + route + ')' : '') + tagText;
       if (isFlightDay) {
         cell.style.background = colors.border;
         cell.style.borderColor = colors.border;
@@ -1104,9 +1108,9 @@ function renderCalendar() {
         cell.innerHTML = '<span class="dnum" style="color:#fff;">' + d + '</span>' +
           '<span class="dcountry" style="color:#fff;">&#9992; ' + route + tagText + '</span>';
       } else {
-        // Country-level presence, PLUS the state/region if one was entered \u2014 e.g. "Italy
-        // (Dolomites)" rather than just "Italy" \u2014 since that detail matters and was
-        // previously being silently dropped from the calendar view.
+        // Country-level presence, PLUS the city/area if one is known \u2014 e.g. "Italy
+        // (Dolomites)" or "United States (Miami)" \u2014 whether that came from a manually
+        // typed state or from the arrival city on a logged boarding pass.
         cell.style.background = colors.bg; cell.style.borderColor = colors.border;
         cell.innerHTML = '<span class="dnum">' + d + '</span><span class="dcountry" style="color:' + colors.text + '">' + (trip.country || trip.region) + stateText + tagText + '</span>';
       }
