@@ -1739,7 +1739,10 @@ function findDuplicateTrips() {
   let pool = trips;
   if (yearFilterActive()) pool = pool.filter(t => overlapsCalYear(t.entry, t.exit));
   pool.forEach(t => {
-    const key = [t.country, t.state || '', t.entry, t.exit].join('|');
+    // Include the note field (usually the arrival city on a multi-leg travel day) so that two
+    // genuinely different stops \u2014 e.g. Washington and New York, both on the same day \u2014 are
+    // never mistaken for the same duplicate entry just because the date and country match.
+    const key = [t.country, t.state || '', t.entry, t.exit, t.note || ''].join('|');
     (groups[key] = groups[key] || []).push(t);
   });
   return Object.values(groups).filter(g => g.length > 1);
