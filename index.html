@@ -522,6 +522,8 @@ window.addEventListener('error', function (e) {
 let trips = [];
 let legs = [];
 let expenses = [];
+let dayNotes = {}; // e.g. { '2026-06-12': 'Miami' } -- a pure display label for one specific day,
+                    // never changes which trip, country, or day-count anything belongs to.
 let storageOk = true;
 let storageMode = 'none';
 let ukThresh = 16;
@@ -692,6 +694,7 @@ async function loadAll() {
     await saveLegs();
   } catch (e) { legs = []; }
   try { const v = await storageGetRaw('expenses-list'); expenses = v ? JSON.parse(v) : []; } catch (e) { expenses = []; }
+  try { const v = await storageGetRaw('day-notes'); dayNotes = v ? JSON.parse(v) : {}; } catch (e) { dayNotes = {}; }
   try { const t = await storageGetRaw('uk-threshold'); if (t) ukThresh = Number(t); } catch (e) {}
   try { const t = await storageGetRaw('uae-threshold'); if (t) uaeThresh = Number(t); } catch (e) {}
   try { const v = await storageGetRaw('undo-stack'); undoStack = v ? JSON.parse(v) : []; } catch (e) { undoStack = []; }
@@ -766,6 +769,7 @@ function updateRedoButton() {
 async function saveTrips() { storageOk = await storageSetRaw('trips-list', JSON.stringify(trips)); touchLastSaved(); }
 async function saveLegs() { storageOk = await storageSetRaw('legs-list', JSON.stringify(legs)); touchLastSaved(); }
 async function saveExpenses() { storageOk = await storageSetRaw('expenses-list', JSON.stringify(expenses)); touchLastSaved(); }
+async function saveDayNotes() { storageOk = await storageSetRaw('day-notes', JSON.stringify(dayNotes)); touchLastSaved(); }
 async function saveUkThresh(v) { ukThresh = Number(v); await storageSetRaw('uk-threshold', String(ukThresh)); }
 async function saveUaeThresh(v) { uaeThresh = Number(v); await storageSetRaw('uae-threshold', String(uaeThresh)); }
 
@@ -1064,8 +1068,10 @@ function renderCalendar() {
     const tags = dayExpenseTags(dateStr);
     const tagText = tags.length > 0 ? ' (' + tags.join(', ') + ')' : '';
     const transitChain = findTransitChainForDay(dateStr, dayMs);
+    const dayNoteOverride = dayNotes[dateStr] || '';
     const cell = document.createElement('div');
     cell.className = 'cal-day' + (dateStr === todayStr ? ' today' : '');
+    cell.style.position = 'relative';
     if (transitChain) {
       // A genuine cross-country transit day, built from receipts on both sides (e.g. a duty-free
       // purchase and a hotel check-in the same day) \u2014 chain them like a multi-leg flight day.
@@ -1081,7 +1087,7 @@ function renderCalendar() {
       // If a real flight ALSO happens to be logged for this exact day, show that too \u2014 it's
       // stronger evidence and shouldn't be hidden just because this trip is still marked receipt-only.
       const evOnlyRoute = buildFlightDayRoute(dateStr);
-      const stateText = trip.state ? ' (' + trip.state + ')' : '';
+      const stateText = (dayNoteOverride || trip.state) ? ' (' + (dayNoteOverride || trip.state) + ')' : '';
       const noteText = trip.note ? ' \u2013 ' + trip.note : '';
       const flightPrefix = evOnlyRoute ? '\u2708 ' + evOnlyRoute + ' \u2014 ' : '';
       cell.title = flightPrefix + (trip.country || trip.region) + (trip.state ? ', ' + trip.state : '') + ' \u2014 receipt-only evidence' + noteText + tagText;
@@ -1097,7 +1103,9 @@ function renderCalendar() {
       // A manually-typed trip keeps its city/area in "state" (e.g. "Miami", "Dolomites").
       // A trip built from a boarding pass keeps the arrival city in "note" instead \u2014 "state"
       // is always blank there. Show whichever one actually has something, state taking priority.
-      const placeText = trip.state || trip.note || '';
+      // A manual day-label (the pencil icon) overrides both \u2014 useful for a single day within
+      // a longer trip where a receipt reveals he was actually somewhere more specific that day.
+      const placeText = dayNoteOverride || trip.state || trip.note || '';
       const stateText = placeText ? ' (' + placeText + ')' : '';
       cell.title = (trip.country || trip.region) + (placeText ? ', ' + placeText : '') +
         (route ? ' (' + route + ')' : '') + tagText;
@@ -1110,7 +1118,7 @@ function renderCalendar() {
       } else {
         // Country-level presence, PLUS the city/area if one is known \u2014 e.g. "Italy
         // (Dolomites)" or "United States (Miami)" \u2014 whether that came from a manually
-        // typed state or from the arrival city on a logged boarding pass.
+        // typed state, the arrival city on a logged boarding pass, or a one-day manual label.
         cell.style.background = colors.bg; cell.style.borderColor = colors.border;
         cell.innerHTML = '<span class="dnum">' + d + '</span><span class="dcountry" style="color:' + colors.text + '">' + (trip.country || trip.region) + stateText + tagText + '</span>';
       }
@@ -1124,6 +1132,21 @@ function renderCalendar() {
         '<span class="dcountry" style="color:#fff;">&#9888; ' + tagText.trim() + '</span>';
     } else {
       cell.innerHTML = '<span class="dnum">' + d + '</span>';
+    }
+    // A small pencil in the corner of any day that has a trip \u2014 click it to label just that
+    // one day (e.g. "Miami") without needing to split or restructure the trip itself at all.
+    if (trip) {
+      const pencilTitle = dayNoteOverride ? 'Change the label for just this day (currently \u201c' + dayNoteOverride + '\u201d)' : 'Label just this day \u2014 e.g. a specific city a receipt reveals, without splitting the trip';
+      cell.insertAdjacentHTML('beforeend', '<span class="day-note-pencil" title="' + pencilTitle + '" style="position:absolute; top:2px; right:4px; cursor:pointer; font-size:12px; opacity:0.65; line-height:1;">&#9998;</span>');
+      const pencil = cell.querySelector('.day-note-pencil');
+      pencil.onclick = (e) => {
+        e.stopPropagation();
+        const current = dayNotes[dateStr] || '';
+        const result = prompt('Label just ' + dateStr + ' as (leave blank to remove the label):', current);
+        if (result === null) return; // cancelled, change nothing
+        if (result.trim() === '') { delete dayNotes[dateStr]; } else { dayNotes[dateStr] = result.trim(); }
+        saveDayNotes().then(() => renderCalendar());
+      };
     }
     if (trip || tags.length > 0) {
       cell.classList.add('has-entry');
