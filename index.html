@@ -1137,7 +1137,10 @@ function renderCalendar() {
     // one day (e.g. "Miami") without needing to split or restructure the trip itself at all.
     if (trip) {
       const pencilTitle = dayNoteOverride ? 'Change the label for just this day (currently \u201c' + dayNoteOverride + '\u201d)' : 'Label just this day \u2014 e.g. a specific city a receipt reveals, without splitting the trip';
-      cell.insertAdjacentHTML('beforeend', '<span class="day-note-pencil" title="' + pencilTitle + '" style="position:absolute; top:2px; right:4px; cursor:pointer; font-size:12px; opacity:0.65; line-height:1;">&#9998;</span>');
+      cell.insertAdjacentHTML('beforeend',
+        '<span class="day-note-pencil" title="' + pencilTitle + '" style="position:absolute; top:2px; right:2px; z-index:5; cursor:pointer; ' +
+        'width:20px; height:20px; display:flex; align-items:center; justify-content:center; font-size:12px; ' +
+        'background:rgba(255,255,255,0.9); border:1px solid rgba(0,0,0,0.25); border-radius:50%; line-height:1;">&#9998;</span>');
       const pencil = cell.querySelector('.day-note-pencil');
       pencil.onclick = (e) => {
         e.stopPropagation();
@@ -1150,7 +1153,7 @@ function renderCalendar() {
     }
     if (trip || tags.length > 0) {
       cell.classList.add('has-entry');
-      cell.onclick = () => jumpToDate(dateStr);
+      cell.onclick = (e) => { if (e.target.closest('.day-note-pencil')) return; jumpToDate(dateStr); };
     }
     grid.appendChild(cell);
   }
