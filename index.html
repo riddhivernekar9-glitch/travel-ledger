@@ -1081,18 +1081,20 @@ function renderCalendar() {
       // If a real flight ALSO happens to be logged for this exact day, show that too \u2014 it's
       // stronger evidence and shouldn't be hidden just because this trip is still marked receipt-only.
       const evOnlyRoute = buildFlightDayRoute(dateStr);
-      const noteText = trip.note ? ' (' + trip.note + ')' : '';
+      const stateText = trip.state ? ' (' + trip.state + ')' : '';
+      const noteText = trip.note ? ' \u2013 ' + trip.note : '';
       const flightPrefix = evOnlyRoute ? '\u2708 ' + evOnlyRoute + ' \u2014 ' : '';
       cell.title = flightPrefix + (trip.country || trip.region) + (trip.state ? ', ' + trip.state : '') + ' \u2014 receipt-only evidence' + noteText + tagText;
       cell.style.background = 'var(--alert)';
       cell.style.borderColor = 'var(--alert)';
       cell.style.borderWidth = '2px';
       cell.innerHTML = '<span class="dnum" style="color:#fff;">' + d + '</span>' +
-        '<span class="dcountry" style="color:#fff;">' + (evOnlyRoute ? '\u2708 ' + evOnlyRoute + ' \u2014 ' : '') + '&#9888; ' + (trip.country || trip.region) + noteText + tagText + '</span>';
+        '<span class="dcountry" style="color:#fff;">' + (evOnlyRoute ? '\u2708 ' + evOnlyRoute + ' \u2014 ' : '') + '&#9888; ' + (trip.country || trip.region) + stateText + noteText + tagText + '</span>';
     } else if (trip) {
       const colors = REGION_COLORS[trip.region] || REGION_COLORS.Other;
       const route = buildFlightDayRoute(dateStr);
       const isFlightDay = !!route;
+      const stateText = trip.state ? ' (' + trip.state + ')' : '';
       cell.title = (trip.country || trip.region) + (trip.state ? ', ' + trip.state : '') +
         (route ? ' (' + route + ')' : (trip.note ? ' \u2013 last confirmed city: ' + trip.note : '')) + tagText;
       if (isFlightDay) {
@@ -1102,10 +1104,11 @@ function renderCalendar() {
         cell.innerHTML = '<span class="dnum" style="color:#fff;">' + d + '</span>' +
           '<span class="dcountry" style="color:#fff;">&#9992; ' + route + tagText + '</span>';
       } else {
-        // Country-level presence only \u2014 no specific city shown here, since we only
-        // confirm the city on the actual flight day itself, never in between.
+        // Country-level presence, PLUS the state/region if one was entered \u2014 e.g. "Italy
+        // (Dolomites)" rather than just "Italy" \u2014 since that detail matters and was
+        // previously being silently dropped from the calendar view.
         cell.style.background = colors.bg; cell.style.borderColor = colors.border;
-        cell.innerHTML = '<span class="dnum">' + d + '</span><span class="dcountry" style="color:' + colors.text + '">' + (trip.country || trip.region) + tagText + '</span>';
+        cell.innerHTML = '<span class="dnum">' + d + '</span><span class="dcountry" style="color:' + colors.text + '">' + (trip.country || trip.region) + stateText + tagText + '</span>';
       }
     } else if (tags.length > 0) {
       // No trip logged for this day, but a bill/receipt exists \u2014 flag it boldly so it's not missed.
@@ -1912,8 +1915,13 @@ function resolveOverlaps(newTrip, restrictToEvidenceOnly) {
 
     adjustedCount++;
 
-    // New trip fully covers the old one -> the old one is entirely replaced
+    // New trip fully covers the old one -> the old one is entirely replaced.
+    // If the new trip didn't specify a state or note of its own, carry over the old trip's \u2014
+    // this is exactly the case that was silently dropping detail like "Roma" or "Dolomites"
+    // whenever a receipt-only trip got converted into a confirmed one by re-entering it.
     if (newEntry <= tEntry && tExit <= newExit) {
+      if (!newTrip.state && t.state) newTrip.state = t.state;
+      if (!newTrip.note && t.note) newTrip.note = t.note;
       toRemove.push(t.id);
       return;
     }
