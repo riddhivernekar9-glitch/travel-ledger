@@ -1170,15 +1170,14 @@ function renderCalendar() {
     cell.querySelector('.day-add-bill').onclick = (e) => {
       e.stopPropagation();
       resetExpenseForm();
-      populateExpTripSelect();
+      populateExpTripSelect(trip ? trip.id : null);
       const tripSel = document.getElementById('expTrip');
-      if (trip && !trip.derived) {
-        tripSel.value = trip.id; // a real, editable trip already covers this day \u2014 attach the bill to it
+      if (trip) {
+        tripSel.value = trip.id; // a trip already covers this day \u2014 whether from a boarding pass, a hotel, or manual entry \u2014 attach the bill to it
       } else {
-        tripSel.value = '__new__'; // no trip yet (or it's flight-derived and shouldn't gain stray bills) \u2014 create one for just this day
+        tripSel.value = '__new__'; // no trip at all covers this day yet \u2014 create one for just this day
         document.getElementById('expNewTripEntry').value = dateStr;
         document.getElementById('expNewTripExit').value = dateStr;
-        if (trip) document.getElementById('expNewTripCountry').value = trip.country;
       }
       updateNewTripFieldVisibility();
       document.getElementById('expDate').value = dateStr;
@@ -1576,15 +1575,16 @@ function buildTripsFromLegs() {
 }
 
 // ================= expenses =================
-function populateExpTripSelect() {
+function populateExpTripSelect(forceIncludeId) {
   const sel = document.getElementById('expTrip');
   const prevVal = sel.value;
   const editingTripId = document.getElementById('expEditId').value
     ? (expenses.find(ex => ex.id === document.getElementById('expEditId').value) || {}).tripId
     : null;
+  const mustInclude = forceIncludeId || editingTripId;
   let pool = trips;
   if (yearFilterActive()) {
-    pool = trips.filter(t => overlapsCalYear(t.entry, t.exit) || t.id === editingTripId);
+    pool = trips.filter(t => overlapsCalYear(t.entry, t.exit) || t.id === mustInclude);
   }
   const sorted = [...pool].sort((a, b) => parseDate(b.entry) - parseDate(a.entry));
   const newTripOption = '<option value="__new__">+ Create a new trip for this bill</option>';
