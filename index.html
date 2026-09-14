@@ -1985,6 +1985,11 @@ function resolveOverlaps(newTrip, restrictToEvidenceOnly) {
     if (newEntry <= tEntry && tExit <= newExit) {
       if (!newTrip.state && t.state) newTrip.state = t.state;
       if (!newTrip.note && t.note) newTrip.note = t.note;
+      // Any bill attached to the old trip must follow it here directly \u2014 relying on a
+      // later date-match to find them a home isn't safe, since a genuine gap can leave a
+      // bill permanently orphaned ("trip removed \u2014 click edit to reattach") if nothing
+      // else happens to cover that exact date afterward.
+      expenses.forEach(ex => { if (ex.tripId === t.id) ex.tripId = newTrip.id; });
       toRemove.push(t.id);
       return;
     }
