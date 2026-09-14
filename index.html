@@ -812,19 +812,24 @@ const REGION_COLORS = {
 };
 function computeStats(asof) {
   const stats = [];
+  const nextJan1 = (y) => Date.UTC(y + 1, 0, 1);
+  const asofYear = new Date(asof).getUTCFullYear();
+
   const schStart = asof - 179 * 86400000;
   let schDays = 0;
   trips.filter(t => t.region === 'Schengen').forEach(t => { schDays += overlapDays(t.entry, t.exit, schStart, asof); });
   stats.push({ title: 'Schengen area', ruleLabel: '90 days in any rolling 180', used: schDays, threshold: 90,
     statusClass: schDays >= 90 ? 'over' : schDays >= 75 ? 'warn' : 'ok', direction: 'atMost',
-    note: 'window: ' + fmt(schStart) + ' to ' + fmt(asof) });
+    note: 'window: ' + fmt(schStart) + ' to ' + fmt(asof),
+    resetInfo: schDays > 0 ? 'Rolling window \u2014 if no more Schengen days are added, this fully clears by ' + fmt(asof + 180 * 86400000) + '.' : '' });
 
   const ukTY = ukTaxYearRange(asof);
   let ukDays = 0;
   trips.filter(t => t.region === 'UK').forEach(t => { ukDays += overlapDays(t.entry, t.exit, ukTY.start, ukTY.end); });
   stats.push({ title: 'United Kingdom', ruleLabel: 'UK tax year ' + ukTY.label + ', ' + ukThresh + '-day test',
     used: ukDays, threshold: ukThresh, direction: 'atMost',
-    statusClass: ukDays >= ukThresh ? 'over' : ukDays >= ukThresh * 0.75 ? 'warn' : 'ok', note: '' });
+    statusClass: ukDays >= ukThresh ? 'over' : ukDays >= ukThresh * 0.75 ? 'warn' : 'ok', note: '',
+    resetInfo: 'This UK tax year\u2019s count resets on ' + fmt(ukTaxYearRange(ukTY.end + 86400000).start) + '.' });
 
   const asofDate = new Date(asof);
   const curYear = asofDate.getUTCFullYear();
@@ -838,7 +843,8 @@ function computeStats(asof) {
   const weighted = Math.round(curD + prevD / 3 + prev2D / 6);
   stats.push({ title: 'United States', ruleLabel: 'weighted 3yr total, current yr ' + curD + ' days', used: weighted, threshold: 183,
     direction: 'atMost', statusClass: weighted >= 183 ? 'over' : weighted >= 150 ? 'warn' : 'ok',
-    note: curYear + ': ' + curD + '  +  ' + (curYear - 1) + '/3: ' + Math.round(prevD / 3) + '  +  ' + (curYear - 2) + '/6: ' + Math.round(prev2D / 6) });
+    note: curYear + ': ' + curD + '  +  ' + (curYear - 1) + '/3: ' + Math.round(prevD / 3) + '  +  ' + (curYear - 2) + '/6: ' + Math.round(prev2D / 6),
+    resetInfo: 'The ' + curYear + ' portion resets 1 Jan ' + (curYear + 1) + ' \u2014 but the weighted formula still carries a fraction of ' + curYear + ' and ' + (curYear - 1) + ' forward, so the total doesn\u2019t drop to zero.' });
 
   const uaeStart = asof - 364 * 86400000;
   let uaeDays = 0;
@@ -846,7 +852,8 @@ function computeStats(asof) {
   const uaeStatus = uaeDays >= uaeThresh ? 'ok' : uaeDays >= uaeThresh - 30 ? 'warn' : 'over';
   stats.push({ title: 'UAE', ruleLabel: uaeThresh + '-day route in rolling 12 months', used: uaeDays, threshold: uaeThresh,
     statusClass: uaeStatus, direction: 'atLeast',
-    note: uaeThresh === 90 ? '90-day route: permit + home + business' : '183-day route: physical presence, treaty-grade' });
+    note: uaeThresh === 90 ? '90-day route: permit + home + business' : '183-day route: physical presence, treaty-grade',
+    resetInfo: uaeDays > 0 ? 'Rolling window \u2014 if no more UAE days are added, this fully clears by ' + fmt(asof + 365 * 86400000) + '.' : '' });
 
   const italyYearStart = Date.UTC(new Date(asof).getUTCFullYear(), 0, 1);
   const italyYearEnd = Date.UTC(new Date(asof).getUTCFullYear(), 11, 31);
@@ -854,7 +861,8 @@ function computeStats(asof) {
   trips.filter(t => t.country === 'Italy').forEach(t => { italyDays += overlapDays(t.entry, t.exit, italyYearStart, Math.min(italyYearEnd, asof)); });
   stats.push({ title: 'Italy', ruleLabel: '183 days per calendar year (Italy\u2019s own residency test)', used: italyDays, threshold: 183,
     direction: 'atMost', statusClass: italyDays >= 183 ? 'over' : italyDays >= 150 ? 'warn' : 'ok',
-    note: 'Separate from the Schengen 90/180 pool above \u2014 this is Italy\u2019s own domestic threshold, based on time in Italy specifically.' });
+    note: 'Separate from the Schengen 90/180 pool above \u2014 this is Italy\u2019s own domestic threshold, based on time in Italy specifically.',
+    resetInfo: 'Resets 1 Jan ' + (asofYear + 1) + '.' });
 
   const cyYearStart = Date.UTC(new Date(asof).getUTCFullYear(), 0, 1);
   const cyYearEnd = Date.UTC(new Date(asof).getUTCFullYear(), 11, 31);
@@ -862,11 +870,12 @@ function computeStats(asof) {
   trips.filter(t => t.region === 'Cyprus').forEach(t => { cyprusDays += overlapDays(t.entry, t.exit, cyYearStart, Math.min(cyYearEnd, asof)); });
   stats.push({ title: 'Cyprus', ruleLabel: '183 days per calendar year (Cyprus\u2019s own residency test)', used: cyprusDays, threshold: 183,
     direction: 'atMost', statusClass: cyprusDays >= 183 ? 'over' : cyprusDays >= 150 ? 'warn' : 'ok',
-    note: 'Cyprus is outside Schengen and outside the UAE/UK/US tests \u2014 this is its own separate domestic threshold. Note: Cyprus also offers a 60-day route for people who aren\u2019t tax-resident anywhere else and have ties there (business/property) \u2014 not modeled here, worth checking separately if relevant.' });
+    note: 'Cyprus is outside Schengen and outside the UAE/UK/US tests \u2014 this is its own separate domestic threshold. Note: Cyprus also offers a 60-day route for people who aren\u2019t tax-resident anywhere else and have ties there (business/property) \u2014 not modeled here, worth checking separately if relevant.',
+    resetInfo: 'Resets 1 Jan ' + (asofYear + 1) + '.' });
 
   return stats;
 }
-function makeStub(title, ruleLabel, used, threshold, statusClass, note, direction) {
+function makeStub(title, ruleLabel, used, threshold, statusClass, note, direction, resetInfo) {
   direction = direction || 'atMost';
   const el = document.createElement('div');
   el.className = 'stub';
@@ -889,6 +898,7 @@ function makeStub(title, ruleLabel, used, threshold, statusClass, note, directio
     '<div class="num-row"><span class="num">' + used + '</span><span class="of">/ ' + threshold + ' days</span></div>' +
     '<div class="bar-track"><div class="bar-fill" style="width:' + pct + '%; background:' + color + '"></div></div>' +
     '<span class="status ' + statusClass + '">' + statusText + (tailNum > 0 ? ' &middot; ' + tailNum + ' ' + tailText : '') + '</span>' +
+    (resetInfo ? '<div class="hint" style="margin-top:6px; color:var(--ink-soft);">&#8635; ' + resetInfo + '</div>' : '') +
     (note ? '<div class="hint" style="margin-top:8px;">' + note + '</div>' : '');
   return el;
 }
@@ -935,7 +945,7 @@ function renderBoard() {
   const board = document.getElementById('board');
   board.innerHTML = '';
   const stats = computeStats(asof);
-  stats.forEach(s => board.appendChild(makeStub(s.title, s.ruleLabel, s.used, s.threshold, s.statusClass, s.note, s.direction)));
+  stats.forEach(s => board.appendChild(makeStub(s.title, s.ruleLabel, s.used, s.threshold, s.statusClass, s.note, s.direction, s.resetInfo)));
   renderYearJumpButtons();
 
   const ukStub = board.children[1];
