@@ -1966,6 +1966,10 @@ function resolveOverlaps(newTrip, restrictToEvidenceOnly) {
 
   trips.forEach(t => {
     if (t.id === newTrip.id) return;
+    if (t.country !== newTrip.country) return; // only ever resolve overlaps WITHIN the same country \u2014
+    // two different countries sharing a boundary day (e.g. depart the US, land in the UAE the same
+    // day) is completely normal, and BOTH legitimately count that day. This must never trim across
+    // countries \u2014 doing so was silently undercounting one side of every transit day.
     if (restrictToEvidenceOnly && !t.evidenceOnly) return; // never touch an ordinary, properly-entered trip here
     const tEntry = parseDate(t.entry);
     const tExit = parseDate(t.exit);
