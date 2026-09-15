@@ -213,124 +213,8 @@
   </div>
 
   <div class="step">
-    <h2>Log a boarding pass</h2>
-    <p class="hint" style="margin-bottom:10px;">Departure date/city, then arrival date/city. No times, no
-      durations &mdash; if the exact landing date isn't printed on the pass, just use the departure date again.</p>
-    <form class="entry" id="legForm">
-      <input type="hidden" id="legEditId" value="">
-      <div>
-        <label>Departure date</label>
-        <input type="date" id="legDepDate" required>
-      </div>
-      <div>
-        <label>From (departed)</label>
-        <select id="legFrom"></select>
-      </div>
-      <div>
-        <label>Departure city (optional)</label>
-        <input type="text" id="legDepCity" placeholder="e.g. London Heathrow">
-      </div>
-      <div>
-        <label>To (arrived)</label>
-        <select id="legTo"></select>
-      </div>
-      <div>
-        <label>Arrival date (optional &mdash; defaults to departure date)</label>
-        <input type="date" id="legArrDate">
-      </div>
-      <div>
-        <label>Arrival city (optional)</label>
-        <input type="text" id="legArrCity" placeholder="e.g. San Diego">
-      </div>
-      <div>
-        <button type="submit" id="legSubmitBtn">Add flight</button>
-      </div>
-      <div>
-        <button type="button" id="legCancelBtn" class="btn-secondary" style="display:none;">Cancel edit</button>
-      </div>
-    </form>
-    <div id="legFormStatus" class="hint" style="margin-top:8px;"></div>
-
-    <table class="ledger" style="margin-top:14px;">
-      <thead><tr><th>Dep. date</th><th>From</th><th>Dep. city</th><th>To</th><th>Arr. date</th><th>Arr. city</th><th></th></tr></thead>
-      <tbody id="legBody"></tbody>
-    </table>
-
-    <div class="backup-row" style="margin-top:14px;">
-      <button type="button" id="buildTripsBtn" class="btn-secondary">Refresh calendar now</button>
-      <span id="buildStatus" class="hint"></span>
-    </div>
-    <p class="hint"><strong>The calendar updates automatically</strong> every time you add, edit, or remove a
-      flight above &mdash; you don't need to click anything else. This button is just a manual refresh, there in
-      case you ever want to force it. Chains your flights together by date: arriving somewhere starts the stay,
-      your next flight out ends it. Never touches anything you type into "Add a trip" below.</p>
-    <div id="legWarnings"></div>
-  </div>
-
-  <div class="step">
-    <h2>Add a trip directly (or fix one built from a flight)</h2>
-    <form class="entry" id="entryForm">
-      <input type="hidden" id="tripEditId" value="">
-      <div>
-        <label>Country</label>
-        <select id="country"></select>
-      </div>
-      <div>
-        <label>State / region (optional)</label>
-        <input type="text" id="state" placeholder="e.g. California">
-      </div>
-      <div>
-        <label>Entry date</label>
-        <input type="date" id="entryDate" required>
-      </div>
-      <div>
-        <label>Exit date</label>
-        <input type="date" id="exitDate" required>
-      </div>
-      <div>
-        <label>Notes (optional)</label>
-        <input type="text" id="note" placeholder="e.g. client visit, or the receipt's vendor name">
-      </div>
-      <div style="flex-basis:100%; display:flex; align-items:center; gap:8px; margin-top:2px;">
-        <input type="checkbox" id="evidenceOnly" style="width:auto;">
-        <label for="evidenceOnly" style="margin:0; cursor:pointer;">This trip is only backed by a receipt/bill (no boarding pass or hotel booking) &mdash; flag it on the calendar</label>
-      </div>
-      <div>
-        <button type="submit" id="tripSubmitBtn">Add trip</button>
-      </div>
-      <div>
-        <button type="button" id="tripCancelBtn" class="btn-secondary" style="display:none;">Cancel edit</button>
-      </div>
-    </form>
-  </div>
-
-  <div class="step">
-    <h2>Still needs a boarding pass</h2>
-    <p class="hint">Every trip currently flagged as receipt-only, in one place &mdash; work through this list to
-      find and log the missing flights, rather than hunting through the full trip table below.</p>
-    <div id="needsPassList" style="margin-top:10px;"></div>
-  </div>
-
-  <div class="step">
-    <h2>Your trips</h2>
-    <button type="button" id="upgradeAllBtn" class="btn-primary" style="margin-bottom:8px;">Make bill-backed trips proper (one click, does everything)</button>
-    <p class="hint" style="margin-bottom:10px;">Carves precise trips out of hotel bookings, then upgrades any trip that already has at least
-      one bill attached (hotel, restaurant, taxi, anything) from receipt-only to fully confirmed \u2014 matching the idea that
-      a hotel booking plus bills is real evidence of being in a country, not just a boarding pass.</p>
-    <button type="button" id="backfillHotelBtn" class="btn-secondary" style="margin-bottom:8px;">Just tighten dates using hotel bookings (no upgrading)</button>
-    <p class="hint" style="margin-bottom:10px;">For any hotel bill sitting inside a wide receipt-only trip, this carves out a precise trip
-      matching the hotel's own check-in/check-out dates \u2014 one click, does the whole list at once. Only ever touches
-      receipt-only trips; never a confirmed flight-backed one.</p>
-    <div id="backfillStatus" class="hint" style="margin-bottom:12px;"></div>
-    <input type="text" id="tripSearch" placeholder="Filter by country, state, or notes&hellip;" style="width:100%; font-family:'Courier New',monospace; font-size:13px; padding:8px; border:1px solid var(--line-strong); border-radius:2px; background:var(--paper); color:var(--ink); margin-bottom:12px;">
-    <div id="billMismatchWarnings"></div>
-    <div id="dupWarnings"></div>
-    <p class="hint" style="margin-bottom:8px;">Click any trip to see its bills and evidence in one place, without scrolling through the full bill list below.</p>
-    <div id="tripBody"></div>
-  </div>
-
-  <div class="step">
-    <h2>Log a receipt or bill</h2>
+    <h2>Log a day</h2>
+    <p class="hint" style="margin-bottom:14px;">This is the one place for everything — a hotel booking, a restaurant bill, a taxi receipt, anything. Pick the country and date, add whatever you have, and it builds the trip evidence for you automatically. No need to think about “boarding pass vs trip vs bill” — just log what actually happened that day.</p>
     <form class="entry" id="expenseForm">
       <input type="hidden" id="expEditId" value="">
       <div>
@@ -423,6 +307,128 @@
       <tbody id="expenseBody"></tbody>
     </table>
   </div>
+
+  <div class="step">
+    <h2>Still needs a boarding pass</h2>
+    <p class="hint">Every trip currently flagged as receipt-only, in one place &mdash; work through this list to
+      find and log the missing flights, rather than hunting through the full trip table below.</p>
+    <div id="needsPassList" style="margin-top:10px;"></div>
+  </div>
+
+  <div class="step">
+    <h2>Your trips</h2>
+    <button type="button" id="upgradeAllBtn" class="btn-primary" style="margin-bottom:8px;">Make bill-backed trips proper (one click, does everything)</button>
+    <p class="hint" style="margin-bottom:10px;">Carves precise trips out of hotel bookings, then upgrades any trip that already has at least
+      one bill attached (hotel, restaurant, taxi, anything) from receipt-only to fully confirmed \u2014 matching the idea that
+      a hotel booking plus bills is real evidence of being in a country, not just a boarding pass.</p>
+    <button type="button" id="backfillHotelBtn" class="btn-secondary" style="margin-bottom:8px;">Just tighten dates using hotel bookings (no upgrading)</button>
+    <p class="hint" style="margin-bottom:10px;">For any hotel bill sitting inside a wide receipt-only trip, this carves out a precise trip
+      matching the hotel's own check-in/check-out dates \u2014 one click, does the whole list at once. Only ever touches
+      receipt-only trips; never a confirmed flight-backed one.</p>
+    <div id="backfillStatus" class="hint" style="margin-bottom:12px;"></div>
+    <input type="text" id="tripSearch" placeholder="Filter by country, state, or notes&hellip;" style="width:100%; font-family:'Courier New',monospace; font-size:13px; padding:8px; border:1px solid var(--line-strong); border-radius:2px; background:var(--paper); color:var(--ink); margin-bottom:12px;">
+    <div id="billMismatchWarnings"></div>
+    <div id="dupWarnings"></div>
+    <p class="hint" style="margin-bottom:8px;">Click any trip to see its bills and evidence in one place, without scrolling through the full bill list below.</p>
+    <div id="tripBody"></div>
+  </div>
+
+  <details style="margin-bottom:20px; border:1px solid var(--line); border-radius:4px; padding:2px 16px;">
+    <summary style="cursor:pointer; padding:14px 0; font-weight:bold; color:var(--ink-soft);">Advanced: log an actual boarding pass, or fix a trip's dates directly</summary>
+    <p class="hint" style="margin-bottom:16px;">Most of the time, “Log a day” above is all you need. Use this only when you have a real boarding pass to log precisely, or need to manually correct a trip's exact dates.</p>
+  <div class="step">
+    <h2>Log a boarding pass</h2>
+    <p class="hint" style="margin-bottom:10px;">Departure date/city, then arrival date/city. No times, no
+      durations &mdash; if the exact landing date isn't printed on the pass, just use the departure date again.</p>
+    <form class="entry" id="legForm">
+      <input type="hidden" id="legEditId" value="">
+      <div>
+        <label>Departure date</label>
+        <input type="date" id="legDepDate" required>
+      </div>
+      <div>
+        <label>From (departed)</label>
+        <select id="legFrom"></select>
+      </div>
+      <div>
+        <label>Departure city (optional)</label>
+        <input type="text" id="legDepCity" placeholder="e.g. London Heathrow">
+      </div>
+      <div>
+        <label>To (arrived)</label>
+        <select id="legTo"></select>
+      </div>
+      <div>
+        <label>Arrival date (optional &mdash; defaults to departure date)</label>
+        <input type="date" id="legArrDate">
+      </div>
+      <div>
+        <label>Arrival city (optional)</label>
+        <input type="text" id="legArrCity" placeholder="e.g. San Diego">
+      </div>
+      <div>
+        <button type="submit" id="legSubmitBtn">Add flight</button>
+      </div>
+      <div>
+        <button type="button" id="legCancelBtn" class="btn-secondary" style="display:none;">Cancel edit</button>
+      </div>
+    </form>
+    <div id="legFormStatus" class="hint" style="margin-top:8px;"></div>
+
+    <table class="ledger" style="margin-top:14px;">
+      <thead><tr><th>Dep. date</th><th>From</th><th>Dep. city</th><th>To</th><th>Arr. date</th><th>Arr. city</th><th></th></tr></thead>
+      <tbody id="legBody"></tbody>
+    </table>
+
+    <div class="backup-row" style="margin-top:14px;">
+      <button type="button" id="buildTripsBtn" class="btn-secondary">Refresh calendar now</button>
+      <span id="buildStatus" class="hint"></span>
+    </div>
+    <p class="hint"><strong>The calendar updates automatically</strong> every time you add, edit, or remove a
+      flight above &mdash; you don't need to click anything else. This button is just a manual refresh, there in
+      case you ever want to force it. Chains your flights together by date: arriving somewhere starts the stay,
+      your next flight out ends it. Never touches anything you type into "Add a trip" below.</p>
+    <div id="legWarnings"></div>
+  </div>
+
+  <div class="step">
+    <h2>Add a trip directly (or fix one built from a flight)</h2>
+    <form class="entry" id="entryForm">
+      <input type="hidden" id="tripEditId" value="">
+      <div>
+        <label>Country</label>
+        <select id="country"></select>
+      </div>
+      <div>
+        <label>State / region (optional)</label>
+        <input type="text" id="state" placeholder="e.g. California">
+      </div>
+      <div>
+        <label>Entry date</label>
+        <input type="date" id="entryDate" required>
+      </div>
+      <div>
+        <label>Exit date</label>
+        <input type="date" id="exitDate" required>
+      </div>
+      <div>
+        <label>Notes (optional)</label>
+        <input type="text" id="note" placeholder="e.g. client visit, or the receipt's vendor name">
+      </div>
+      <div style="flex-basis:100%; display:flex; align-items:center; gap:8px; margin-top:2px;">
+        <input type="checkbox" id="evidenceOnly" style="width:auto;">
+        <label for="evidenceOnly" style="margin:0; cursor:pointer;">This trip is only backed by a receipt/bill (no boarding pass or hotel booking) &mdash; flag it on the calendar</label>
+      </div>
+      <div>
+        <button type="submit" id="tripSubmitBtn">Add trip</button>
+      </div>
+      <div>
+        <button type="button" id="tripCancelBtn" class="btn-secondary" style="display:none;">Cancel edit</button>
+      </div>
+    </form>
+  </div>
+
+  </details>
 
   <div class="step">
     <h2>Close out a year &amp; print</h2>
