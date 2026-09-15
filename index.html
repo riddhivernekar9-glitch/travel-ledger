@@ -702,7 +702,7 @@ async function loadAll() {
 }
 
 function snapshotState() {
-  return JSON.stringify({ trips, legs, expenses, ukThresh, uaeThresh });
+  return JSON.stringify({ trips, legs, expenses, ukThresh, uaeThresh, dayNotes });
 }
 async function persistUndoRedo() {
   try { await storageSetRaw('undo-stack', JSON.stringify(undoStack)); } catch (e) {}
@@ -725,9 +725,9 @@ async function performUndo() {
   redoStack.push(snapshotState());
   if (redoStack.length > UNDO_LIMIT) redoStack.shift();
   const prev = JSON.parse(undoStack.pop());
-  trips = prev.trips; legs = prev.legs; expenses = prev.expenses;
+  trips = prev.trips; legs = prev.legs; expenses = prev.expenses; dayNotes = prev.dayNotes || {};
   ukThresh = prev.ukThresh; uaeThresh = prev.uaeThresh;
-  await Promise.all([saveTrips(), saveLegs(), saveExpenses(), saveUkThresh(ukThresh), saveUaeThresh(uaeThresh)]);
+  await Promise.all([saveTrips(), saveLegs(), saveExpenses(), saveUkThresh(ukThresh), saveUaeThresh(uaeThresh), saveDayNotes()]);
   await persistUndoRedo();
   renderAll();
   populateCloseYearSelect();
@@ -744,9 +744,9 @@ async function performRedo() {
   undoStack.push(snapshotState());
   if (undoStack.length > UNDO_LIMIT) undoStack.shift();
   const next = JSON.parse(redoStack.pop());
-  trips = next.trips; legs = next.legs; expenses = next.expenses;
+  trips = next.trips; legs = next.legs; expenses = next.expenses; dayNotes = next.dayNotes || {};
   ukThresh = next.ukThresh; uaeThresh = next.uaeThresh;
-  await Promise.all([saveTrips(), saveLegs(), saveExpenses(), saveUkThresh(ukThresh), saveUaeThresh(uaeThresh)]);
+  await Promise.all([saveTrips(), saveLegs(), saveExpenses(), saveUkThresh(ukThresh), saveUaeThresh(uaeThresh), saveDayNotes()]);
   await persistUndoRedo();
   renderAll();
   populateCloseYearSelect();
@@ -1152,11 +1152,12 @@ function renderCalendar() {
         'width:14px; height:14px; display:flex; align-items:center; justify-content:center; font-size:9px; ' +
         'background:rgba(255,255,255,0.9); border:1px solid rgba(0,0,0,0.25); border-radius:50%; line-height:1;">&#9998;</span>');
       const pencil = cell.querySelector('.day-note-pencil');
-      pencil.onclick = (e) => {
+      pencil.onclick = async (e) => {
         e.stopPropagation();
         const current = dayNotes[dateStr] || '';
         const result = prompt('Label just ' + dateStr + ' as (leave blank to remove the label):', current);
         if (result === null) return; // cancelled, change nothing
+        await pushUndo();
         if (result.trim() === '') { delete dayNotes[dateStr]; } else { dayNotes[dateStr] = result.trim(); }
         saveDayNotes().then(() => renderCalendar());
       };
