@@ -1100,13 +1100,18 @@ function renderCalendar() {
           .map(ex => ex.category === 'Train' && ex.fromPlace && ex.toPlace ? 'Train: ' + ex.fromPlace + ' \u2192 ' + ex.toPlace : ex.category);
         const uniqueOwnTags = [...new Set(ownTags)];
         const place = t.state || t.note || '';
-        return '<div style="background:' + colors.bg + '; border-left:3px solid ' + colors.border + '; padding:1px 3px; margin-top:1px; font-size:10px; line-height:1.15; color:' + colors.text + ';">' +
+        return '<div class="multi-day-line" style="background:' + colors.bg + '; border-left:3px solid ' + colors.border + '; padding:1px 3px; margin-top:1px; font-size:10px; line-height:1.15; color:' + colors.text + '; cursor:pointer;">' +
           (t.country || t.region) + (place ? ' (' + place + ')' : '') + (uniqueOwnTags.length > 0 ? ' ' + uniqueOwnTags.join(', ') : '') + '</div>';
       }).join('');
       cell.title = allTripsToday.map(t => (t.country || t.region) + (t.state ? ', ' + t.state : '')).join(' + ') + ' \u2014 a genuine multi-country day, both count toward their own threshold';
       cell.style.background = 'var(--paper-card)';
       cell.style.borderColor = 'var(--line-strong)';
       cell.innerHTML = '<span class="dnum">' + d + '</span>' + lines;
+      // Give each line its own direct click handler too \u2014 don't rely purely on the click
+      // bubbling up to the cell, since a cramped multi-line cell can make that unreliable.
+      cell.querySelectorAll('.multi-day-line').forEach(line => {
+        line.onclick = (e) => { e.stopPropagation(); jumpToDate(dateStr); };
+      });
     } else if (transitChain) {
       // A genuine cross-country transit day, built from receipts on both sides (e.g. a duty-free
       // purchase and a hotel check-in the same day) \u2014 chain them like a multi-leg flight day.
@@ -1211,7 +1216,7 @@ function renderCalendar() {
     };
     if (trip || tags.length > 0) {
       cell.classList.add('has-entry');
-      cell.onclick = (e) => { if (e.target.closest('.day-note-pencil') || e.target.closest('.day-add-bill')) return; jumpToDate(dateStr); };
+      cell.onclick = (e) => { if (e.target.closest('.day-note-pencil') || e.target.closest('.day-add-bill') || e.target.closest('.multi-day-line')) return; jumpToDate(dateStr); };
     }
     grid.appendChild(cell);
   }
