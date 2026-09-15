@@ -1080,7 +1080,9 @@ function renderCalendar() {
   for (let d = 1; d <= daysInMonth; d++) {
     const dayMs = Date.UTC(calYear, calMonth, d);
     const dateStr = fmt(dayMs);
-    const trip = findTripForDay(dayMs);
+    const allTripsToday = trips.filter(t => overlapDays(t.entry, t.exit, dayMs, dayMs) > 0);
+    const distinctCountries = new Set(allTripsToday.map(t => t.country));
+    const trip = allTripsToday[0]; // used by every existing branch below, unchanged for the normal (single-trip) case
     const tags = dayExpenseTags(dateStr);
     const tagText = tags.length > 0 ? ' (' + tags.join(', ') + ')' : '';
     const transitChain = findTransitChainForDay(dateStr, dayMs);
@@ -1088,7 +1090,24 @@ function renderCalendar() {
     const cell = document.createElement('div');
     cell.className = 'cal-day' + (dateStr === todayStr ? ' today' : '');
     cell.style.position = 'relative';
-    if (transitChain) {
+    if (distinctCountries.size > 1) {
+      // A genuine multi-country day \u2014 e.g. breakfast in Miami, a hotel booked in Dubai that
+      // night. Both are real and both legitimately count toward their own country's threshold,
+      // so show each one on its own line rather than picking just one to display.
+      const lines = allTripsToday.map(t => {
+        const colors = REGION_COLORS[t.region] || REGION_COLORS.Other;
+        const ownTags = expenses.filter(ex => ex.tripId === t.id && ex.date && parseDate(ex.date) <= dayMs && (!ex.endDate || parseDate(ex.endDate) >= dayMs))
+          .map(ex => ex.category === 'Train' && ex.fromPlace && ex.toPlace ? 'Train: ' + ex.fromPlace + ' \u2192 ' + ex.toPlace : ex.category);
+        const uniqueOwnTags = [...new Set(ownTags)];
+        const place = t.state || t.note || '';
+        return '<div style="background:' + colors.bg + '; border-left:3px solid ' + colors.border + '; padding:1px 3px; margin-top:1px; font-size:10px; line-height:1.15; color:' + colors.text + ';">' +
+          (t.country || t.region) + (place ? ' (' + place + ')' : '') + (uniqueOwnTags.length > 0 ? ' ' + uniqueOwnTags.join(', ') : '') + '</div>';
+      }).join('');
+      cell.title = allTripsToday.map(t => (t.country || t.region) + (t.state ? ', ' + t.state : '')).join(' + ') + ' \u2014 a genuine multi-country day, both count toward their own threshold';
+      cell.style.background = 'var(--paper-card)';
+      cell.style.borderColor = 'var(--line-strong)';
+      cell.innerHTML = '<span class="dnum">' + d + '</span>' + lines;
+    } else if (transitChain) {
       // A genuine cross-country transit day, built from receipts on both sides (e.g. a duty-free
       // purchase and a hotel check-in the same day) \u2014 chain them like a multi-leg flight day.
       cell.title = 'Transit day (receipt-only evidence): ' + transitChain + tagText;
