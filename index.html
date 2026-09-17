@@ -1515,6 +1515,36 @@ function resetLegForm() {
   document.getElementById('legSubmitBtn').textContent = 'Add flight';
   document.getElementById('legCancelBtn').style.display = 'none';
 }
+function chainAwareSortLegs(legsArray) {
+  // Sorting purely by departure date breaks down the moment two legs share the exact same date
+  // (a same-day connection, e.g. Miami -> New York -> Dubai) -- plain date sorting has no way to
+  // know which of two same-day legs actually comes first in the real route, and getting this
+  // wrong can silently corrupt a trip's dates or drop a whole stay from the count. This instead
+  // groups same-day legs and orders each cluster by where it actually connects to the one before it.
+  const byDate = [...legsArray].sort((a, b) => parseDate(a.depDate) - parseDate(b.depDate));
+  const result = [];
+  let i = 0;
+  while (i < byDate.length) {
+    const clusterDate = byDate[i].depDate;
+    const cluster = [];
+    while (i < byDate.length && byDate[i].depDate === clusterDate) { cluster.push(byDate[i]); i++; }
+    if (cluster.length === 1) { result.push(cluster[0]); continue; }
+    const remaining = [...cluster];
+    let startIdx = remaining.findIndex(l => result.length > 0 && result[result.length - 1].to === l.from);
+    if (startIdx === -1) startIdx = remaining.findIndex(l => !remaining.some(other => other !== l && other.to === l.from));
+    if (startIdx === -1) startIdx = 0;
+    let current = remaining.splice(startIdx, 1)[0];
+    result.push(current);
+    while (remaining.length > 0) {
+      const nextIdx = remaining.findIndex(l => l.from === current.to);
+      if (nextIdx === -1) { remaining.forEach(l => result.push(l)); remaining.length = 0; break; }
+      current = remaining.splice(nextIdx, 1)[0];
+      result.push(current);
+    }
+  }
+  return result;
+}
+
 function buildTripsFromLegs() {
   const warnEl = document.getElementById('legWarnings');
   if (legs.length === 0) {
@@ -1526,7 +1556,7 @@ function buildTripsFromLegs() {
     if (warnEl) warnEl.innerHTML = '';
     return;
   }
-  const sorted = [...legs].sort((a, b) => parseDate(a.depDate) - parseDate(b.depDate));
+  const sorted = chainAwareSortLegs(legs);
   const gapsUncovered = [];
   const gapsCovered = [];
   for (let i = 0; i < sorted.length - 1; i++) {
