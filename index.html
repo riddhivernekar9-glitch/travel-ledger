@@ -209,6 +209,8 @@
       <button type="button" id="calNext">&rarr;</button>
     </div>
     <div class="cal-grid" id="calGrid"></div>
+    <div id="dayDetailOverlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.4); z-index:100;"></div>
+    <div id="dayDetailPanel" style="display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); z-index:101; background:var(--paper-card); border:2px solid var(--line-strong); border-radius:6px; padding:18px; max-width:480px; width:90%; max-height:80vh; overflow-y:auto;"></div>
     <div class="cal-legend" id="calLegend"></div>
   </div>
 
@@ -1019,6 +1021,99 @@ function expandTripCardAndEdit(tripId) {
   if (editBtn) editBtn.click();
 }
 
+function closeDayDetailPanel() {
+  document.getElementById('dayDetailOverlay').style.display = 'none';
+  document.getElementById('dayDetailPanel').style.display = 'none';
+}
+document.getElementById('dayDetailOverlay').onclick = closeDayDetailPanel;
+
+function showDayDetailPanel(dateStr) {
+  const dayMs = parseDate(dateStr);
+  const dayTrips = trips.filter(t => overlapDays(t.entry, t.exit, dayMs, dayMs) > 0);
+  const dayBills = expenses.filter(ex => {
+    if (!ex.date) return false;
+    const start = parseDate(ex.date);
+    let end = ex.endDate ? parseDate(ex.endDate) : start;
+    if (end - start > 60 * 86400000) end = start + 60 * 86400000;
+    return dayMs >= start && dayMs <= end;
+  });
+  const route = buildFlightDayRoute(dateStr);
+
+  let html = '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">' +
+    '<h3 style="margin:0;">' + dateStr + '</h3>' +
+    '<button type="button" id="dayDetailClose" style="font-size:18px; background:none; border:none; cursor:pointer; line-height:1;">&times;</button></div>';
+
+  if (route) html += '<p style="margin:0 0 10px;">&#9992; <strong>' + route + '</strong></p>';
+
+  if (dayTrips.length === 0) {
+    html += '<p class="hint">No trip logged for this day yet.</p>';
+  } else {
+    dayTrips.forEach(t => {
+      const badge = t.evidenceOnly ? ' <span style="color:var(--alert);">&#9888; receipt-only</span>' : t.derived ? ' <span style="color:var(--green);">&#9992; boarding pass</span>' : '';
+      html += '<div style="border:1px solid var(--line); border-radius:4px; padding:8px 10px; margin-bottom:8px;">' +
+        '<strong>' + t.country + '</strong>' + (t.state ? ', ' + t.state : '') + ' (' + t.entry + ' to ' + t.exit + ')' + badge +
+        '<div style="margin-top:6px;"><button type="button" class="edit-btn" data-panel-edit-trip="' + t.id + '">edit this trip</button></div></div>';
+    });
+  }
+
+  if (dayBills.length > 0) {
+    html += '<p style="margin:12px 0 4px;"><strong>Bills this day:</strong></p>';
+    dayBills.forEach(ex => {
+      html += '<div style="font-size:13px; padding:4px 0; border-bottom:1px solid var(--line);">' +
+        ex.category + (ex.vendor ? ' \u2014 ' + ex.vendor : '') + (ex.amount != null ? ' \u2014 ' + Number(ex.amount).toFixed(2) + ' ' + (ex.currency || '') : '') +
+        ' <button type="button" class="edit-btn" data-panel-edit-bill="' + ex.id + '" style="margin-left:6px;">edit</button></div>';
+    });
+  }
+
+  html += '<div style="margin-top:14px;"><button type="button" class="btn-primary" id="dayDetailAddBill">+ add a bill for this day</button></div>';
+
+  const panel = document.getElementById('dayDetailPanel');
+  panel.innerHTML = html;
+  document.getElementById('dayDetailOverlay').style.display = 'block';
+  panel.style.display = 'block';
+
+  document.getElementById('dayDetailClose').onclick = closeDayDetailPanel;
+  panel.querySelectorAll('[data-panel-edit-trip]').forEach(btn => {
+    btn.onclick = () => { closeDayDetailPanel(); expandTripCardAndEdit(btn.dataset.panelEditTrip); };
+  });
+  panel.querySelectorAll('[data-panel-edit-bill]').forEach(btn => {
+    btn.onclick = () => {
+      closeDayDetailPanel();
+      const ex = expenses.find(x => x.id === btn.dataset.panelEditBill);
+      if (!ex) return;
+      document.getElementById('expEditId').value = ex.id;
+      populateExpTripSelect(ex.tripId);
+      document.getElementById('expTrip').value = ex.tripId;
+      updateUaeResidenceVisibility();
+      document.getElementById('expUaeResidence').checked = !!ex.uaeResidence;
+      document.getElementById('expCategory').value = ex.category;
+      updateCategoryFieldVisibility();
+      document.getElementById('expVendor').value = ex.vendor || '';
+      document.getElementById('expDate').value = ex.date || '';
+      document.getElementById('expEndDate').value = ex.endDate || '';
+      document.getElementById('expFrom').value = ex.fromPlace || '';
+      document.getElementById('expTo').value = ex.toPlace || '';
+      document.getElementById('expAmount').value = ex.amount != null ? ex.amount : '';
+      document.getElementById('expCurrency').value = ex.currency || '';
+      document.getElementById('expSubmitBtn').textContent = 'Update bill';
+      document.getElementById('expCancelBtn').style.display = 'inline-block';
+      document.getElementById('expenseForm').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    };
+  });
+  document.getElementById('dayDetailAddBill').onclick = () => {
+    closeDayDetailPanel();
+    resetExpenseForm();
+    const primaryTrip = dayTrips.find(t => !t.derived) || dayTrips[0];
+    populateExpTripSelect(primaryTrip ? primaryTrip.id : null);
+    const tripSel = document.getElementById('expTrip');
+    if (primaryTrip) { tripSel.value = primaryTrip.id; }
+    else { tripSel.value = '__new__'; document.getElementById('expNewTripEntry').value = dateStr; document.getElementById('expNewTripExit').value = dateStr; }
+    updateNewTripFieldVisibility();
+    document.getElementById('expDate').value = dateStr;
+    document.getElementById('expenseForm').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  };
+}
+
 function jumpToDate(dateStr) {
   const dayMs = parseDate(dateStr);
   const matchingLegs = legs.filter(l => l.depDate === dateStr || l.arrDate === dateStr);
@@ -1217,7 +1312,7 @@ function renderCalendar() {
     }
     if (trip || tags.length > 0) {
       cell.classList.add('has-entry');
-      cell.onclick = (e) => { if (e.target.closest('.day-note-pencil') || e.target.closest('.day-add-bill') || e.target.closest('.multi-day-line')) return; jumpToDate(dateStr); };
+      cell.onclick = (e) => { if (e.target.closest('.day-note-pencil') || e.target.closest('.day-add-bill')) return; showDayDetailPanel(dateStr); };
     }
     grid.appendChild(cell);
   }
