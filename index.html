@@ -1490,7 +1490,7 @@ function renderTripCardBody(container, t) {
   };
   container.querySelector('[data-add-bill]').onclick = () => {
     resetExpenseForm();
-    populateExpTripSelect();
+    populateExpTripSelect(t.id);
     document.getElementById('expTrip').value = t.id;
     updateUaeResidenceVisibility();
     document.getElementById('expenseForm').scrollIntoView({ behavior: 'smooth', block: 'center' });
