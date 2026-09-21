@@ -335,7 +335,7 @@
     <div id="tripBody"></div>
   </div>
 
-  <details style="margin-bottom:20px; border:1px solid var(--line); border-radius:4px; padding:2px 16px;">
+  <details id="advancedDetails" style="margin-bottom:20px; border:1px solid var(--line); border-radius:4px; padding:2px 16px;">
     <summary style="cursor:pointer; padding:14px 0; font-weight:bold; color:var(--ink-soft);">Advanced: log an actual boarding pass, or fix a trip's dates directly</summary>
     <p class="hint" style="margin-bottom:16px;">Most of the time, “Log a day” above is all you need. Use this only when you have a real boarding pass to log precisely, or need to manually correct a trip's exact dates.</p>
   <div class="step">
@@ -1486,6 +1486,7 @@ function renderTripCardBody(container, t) {
     document.getElementById('evidenceOnly').checked = !!t.evidenceOnly;
     document.getElementById('tripSubmitBtn').textContent = 'Update trip';
     document.getElementById('tripCancelBtn').style.display = 'inline-block';
+    document.getElementById('advancedDetails').open = true; 
     document.getElementById('entryForm').scrollIntoView({ behavior: 'smooth', block: 'center' });
   };
   container.querySelector('[data-add-bill]').onclick = () => {
@@ -1586,6 +1587,7 @@ function renderLegTable() {
       document.getElementById('legArrCity').value = lg.arrCity || '';
       document.getElementById('legSubmitBtn').textContent = 'Update flight';
       document.getElementById('legCancelBtn').style.display = 'inline-block';
+      document.getElementById('advancedDetails').open = true;
       document.getElementById('legForm').scrollIntoView({ behavior: 'smooth', block: 'center' });
     };
   });
