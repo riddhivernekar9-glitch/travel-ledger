@@ -978,9 +978,11 @@ function renderBoard() {
 // ================= calendar =================
 function findTripForDay(dayMs) { return trips.find(t => overlapDays(t.entry, t.exit, dayMs, dayMs) > 0); }
 function buildFlightDayRoute(dateStr) {
-  const todaysLegs = legs
-    .filter(l => l.depDate === dateStr || l.arrDate === dateStr)
-    .sort((a, b) => (a.depDate + a.id).localeCompare(b.depDate + b.id));
+  // Same chain-aware ordering used to actually build trips from legs (see chainAwareSortLegs) --
+  // plain date/id sorting can't tell which of two same-day flights came first in the real route,
+  // and previously showed nonsense orderings like "Phoenix -> Miami -> San Diego -> Phoenix" for
+  // a same-day San Diego -> Phoenix -> Miami connection.
+  const todaysLegs = chainAwareSortLegs(legs.filter(l => l.depDate === dateStr || l.arrDate === dateStr));
   if (todaysLegs.length === 0) return null;
   const label = (country, city) => city || country;
   const parts = [];
@@ -1037,13 +1039,26 @@ function showDayDetailPanel(dateStr) {
     if (end - start > 60 * 86400000) end = start + 60 * 86400000;
     return dayMs >= start && dayMs <= end;
   });
+  const dayLegs = chainAwareSortLegs(legs.filter(l => l.depDate === dateStr || l.arrDate === dateStr));
   const route = buildFlightDayRoute(dateStr);
 
   let html = '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">' +
     '<h3 style="margin:0;">' + dateStr + '</h3>' +
     '<button type="button" id="dayDetailClose" style="font-size:18px; background:none; border:none; cursor:pointer; line-height:1;">&times;</button></div>';
 
-  if (route) html += '<p style="margin:0 0 10px;">&#9992; <strong>' + route + '</strong></p>';
+  if (dayLegs.length > 0) {
+    if (route) html += '<p style="margin:0 0 6px;">&#9992; <strong>' + route + '</strong></p>';
+    html += '<div style="margin-bottom:10px;">';
+    dayLegs.forEach(l => {
+      const depLabel = l.depCity || l.from;
+      const arrLabel = l.arrCity || l.to;
+      html += '<div style="font-size:13px; padding:4px 0; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; gap:6px;">' +
+        '<span>' + l.depDate + ': ' + depLabel + ' \u2192 ' + arrLabel + (l.arrDate !== l.depDate ? ' (arr. ' + l.arrDate + ')' : '') + '</span>' +
+        '<span><button type="button" class="edit-btn" data-panel-edit-leg="' + l.id + '">edit</button>' +
+        '<button type="button" class="del-btn" data-panel-del-leg="' + l.id + '" style="margin-left:4px;">remove</button></span></div>';
+    });
+    html += '</div>';
+  }
 
   if (dayTrips.length === 0) {
     html += '<p class="hint">No trip logged for this day yet.</p>';
@@ -1052,7 +1067,8 @@ function showDayDetailPanel(dateStr) {
       const badge = t.evidenceOnly ? ' <span style="color:var(--alert);">&#9888; receipt-only</span>' : t.derived ? ' <span style="color:var(--green);">&#9992; boarding pass</span>' : '';
       html += '<div style="border:1px solid var(--line); border-radius:4px; padding:8px 10px; margin-bottom:8px;">' +
         '<strong>' + t.country + '</strong>' + (t.state ? ', ' + t.state : '') + ' (' + t.entry + ' to ' + t.exit + ')' + badge +
-        '<div style="margin-top:6px;"><button type="button" class="edit-btn" data-panel-edit-trip="' + t.id + '">edit this trip</button></div></div>';
+        '<div style="margin-top:6px;"><button type="button" class="edit-btn" data-panel-edit-trip="' + t.id + '">edit this trip</button>' +
+        '<button type="button" class="del-btn" data-panel-del-trip="' + t.id + '" style="margin-left:4px;">remove this trip</button></div></div>';
     });
   }
 
@@ -1061,11 +1077,16 @@ function showDayDetailPanel(dateStr) {
     dayBills.forEach(ex => {
       html += '<div style="font-size:13px; padding:4px 0; border-bottom:1px solid var(--line);">' +
         ex.category + (ex.vendor ? ' \u2014 ' + ex.vendor : '') + (ex.amount != null ? ' \u2014 ' + Number(ex.amount).toFixed(2) + ' ' + (ex.currency || '') : '') +
-        ' <button type="button" class="edit-btn" data-panel-edit-bill="' + ex.id + '" style="margin-left:6px;">edit</button></div>';
+        ' <button type="button" class="edit-btn" data-panel-edit-bill="' + ex.id + '" style="margin-left:6px;">edit</button>' +
+        '<button type="button" class="del-btn" data-panel-del-bill="' + ex.id + '" style="margin-left:4px;">remove</button></div>';
     });
   }
 
-  html += '<div style="margin-top:14px;"><button type="button" class="btn-primary" id="dayDetailAddBill">+ add a bill for this day</button></div>';
+  html += '<div style="margin-top:14px; display:flex; gap:8px; flex-wrap:wrap;">' +
+    '<button type="button" class="btn-primary" id="dayDetailAddBill">+ add a bill for this day</button>' +
+    '<button type="button" class="btn-secondary" id="dayDetailAddLeg">+ add a boarding pass for this day</button>' +
+    '<button type="button" class="btn-secondary" id="dayDetailSearch" title="See every flight, trip, and bill ever logged for this day, highlighted in the full lists below">&#128269; see full history for this day</button>' +
+    '</div>';
 
   const panel = document.getElementById('dayDetailPanel');
   panel.innerHTML = html;
@@ -1073,9 +1094,29 @@ function showDayDetailPanel(dateStr) {
   panel.style.display = 'block';
 
   document.getElementById('dayDetailClose').onclick = closeDayDetailPanel;
+
   panel.querySelectorAll('[data-panel-edit-trip]').forEach(btn => {
     btn.onclick = () => { closeDayDetailPanel(); expandTripCardAndEdit(btn.dataset.panelEditTrip); };
   });
+  panel.querySelectorAll('[data-panel-del-trip]').forEach(btn => {
+    btn.onclick = async () => {
+      const id = btn.dataset.panelDelTrip;
+      const t = trips.find(x => x.id === id);
+      if (!t) return;
+      const billCount = expenses.filter(ex => ex.tripId === id).length;
+      const msg = 'Remove this trip (' + t.country + ', ' + t.entry + ' to ' + t.exit + ')' + (billCount > 0 ? ', and its ' + billCount + ' attached bill(s)' : '') + '?';
+      if (!confirm(msg)) return;
+      await pushUndo();
+      trips = trips.filter(x => x.id !== id);
+      expenses = expenses.filter(ex => ex.tripId !== id);
+      await saveTrips();
+      if (billCount > 0) await saveExpenses();
+      renderAll();
+      populateCloseYearSelect();
+      showDayDetailPanel(dateStr); // refresh the popup in place rather than closing it
+    };
+  });
+
   panel.querySelectorAll('[data-panel-edit-bill]').forEach(btn => {
     btn.onclick = () => {
       closeDayDetailPanel();
@@ -1100,6 +1141,49 @@ function showDayDetailPanel(dateStr) {
       document.getElementById('expenseForm').scrollIntoView({ behavior: 'smooth', block: 'center' });
     };
   });
+  panel.querySelectorAll('[data-panel-del-bill]').forEach(btn => {
+    btn.onclick = async () => {
+      await pushUndo();
+      expenses = expenses.filter(ex => ex.id !== btn.dataset.panelDelBill);
+      await saveExpenses();
+      renderExpenseTable();
+      renderCalendar();
+      renderTripBillMismatchWarnings();
+      showDayDetailPanel(dateStr); // refresh the popup in place rather than closing it
+    };
+  });
+
+  panel.querySelectorAll('[data-panel-edit-leg]').forEach(btn => {
+    btn.onclick = () => {
+      closeDayDetailPanel();
+      const lg = legs.find(l => l.id === btn.dataset.panelEditLeg);
+      if (!lg) return;
+      document.getElementById('legEditId').value = lg.id;
+      document.getElementById('legDepDate').value = lg.depDate;
+      document.getElementById('legFrom').value = lg.from;
+      document.getElementById('legDepCity').value = lg.depCity || '';
+      document.getElementById('legTo').value = lg.to;
+      document.getElementById('legArrDate').value = lg.arrDate;
+      document.getElementById('legArrCity').value = lg.arrCity || '';
+      document.getElementById('legSubmitBtn').textContent = 'Update flight';
+      document.getElementById('legCancelBtn').style.display = 'inline-block';
+      document.getElementById('advancedDetails').open = true;
+      document.getElementById('legForm').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    };
+  });
+  panel.querySelectorAll('[data-panel-del-leg]').forEach(btn => {
+    btn.onclick = async () => {
+      await pushUndo();
+      const removedId = btn.dataset.panelDelLeg;
+      legs = legs.filter(l => l.id !== removedId);
+      await saveLegs();
+      if (document.getElementById('legEditId').value === removedId) resetLegForm();
+      renderLegTable();
+      buildTripsFromLegs();
+      showDayDetailPanel(dateStr); // refresh the popup in place rather than closing it
+    };
+  });
+
   document.getElementById('dayDetailAddBill').onclick = () => {
     closeDayDetailPanel();
     resetExpenseForm();
@@ -1112,9 +1196,21 @@ function showDayDetailPanel(dateStr) {
     document.getElementById('expDate').value = dateStr;
     document.getElementById('expenseForm').scrollIntoView({ behavior: 'smooth', block: 'center' });
   };
+  document.getElementById('dayDetailAddLeg').onclick = () => {
+    closeDayDetailPanel();
+    resetLegForm();
+    document.getElementById('legDepDate').value = dateStr;
+    document.getElementById('advancedDetails').open = true;
+    document.getElementById('legForm').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  };
+  document.getElementById('dayDetailSearch').onclick = () => {
+    closeDayDetailPanel();
+    jumpToDate(dateStr);
+  };
 }
 
 function jumpToDate(dateStr) {
+  document.getElementById('advancedDetails').open = true; // the flight table lives in the collapsed "Advanced" section — open it first, or its rows aren't visible to scroll/highlight
   const dayMs = parseDate(dateStr);
   const matchingLegs = legs.filter(l => l.depDate === dateStr || l.arrDate === dateStr);
   const matchingTrips = trips.filter(t => overlapDays(t.entry, t.exit, dayMs, dayMs) > 0);
@@ -1486,7 +1582,7 @@ function renderTripCardBody(container, t) {
     document.getElementById('evidenceOnly').checked = !!t.evidenceOnly;
     document.getElementById('tripSubmitBtn').textContent = 'Update trip';
     document.getElementById('tripCancelBtn').style.display = 'inline-block';
-    document.getElementById('advancedDetails').open = true; 
+    document.getElementById('advancedDetails').open = true; // this form lives inside the collapsed "Advanced" section — open it first, or scrollIntoView has nothing visible to scroll to
     document.getElementById('entryForm').scrollIntoView({ behavior: 'smooth', block: 'center' });
   };
   container.querySelector('[data-add-bill]').onclick = () => {
@@ -1587,7 +1683,7 @@ function renderLegTable() {
       document.getElementById('legArrCity').value = lg.arrCity || '';
       document.getElementById('legSubmitBtn').textContent = 'Update flight';
       document.getElementById('legCancelBtn').style.display = 'inline-block';
-      document.getElementById('advancedDetails').open = true;
+      document.getElementById('advancedDetails').open = true; // this form lives inside the collapsed "Advanced" section — open it first, or scrollIntoView has nothing visible to scroll to
       document.getElementById('legForm').scrollIntoView({ behavior: 'smooth', block: 'center' });
     };
   });
