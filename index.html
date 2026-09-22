@@ -1287,8 +1287,13 @@ function renderCalendar() {
       // so show each one on its own line rather than picking just one to display.
       const lines = allTripsToday.map(t => {
         const colors = REGION_COLORS[t.region] || REGION_COLORS.Other;
-        const ownTags = expenses.filter(ex => ex.tripId === t.id && ex.date && parseDate(ex.date) <= dayMs && (!ex.endDate || parseDate(ex.endDate) >= dayMs))
-          .map(ex => ex.category === 'Train' && ex.fromPlace && ex.toPlace ? 'Train: ' + ex.fromPlace + ' \u2192 ' + ex.toPlace : ex.category);
+        const ownTags = expenses.filter(ex => {
+          if (!(ex.tripId === t.id && ex.date)) return false;
+          const start = parseDate(ex.date);
+          let end = ex.endDate ? parseDate(ex.endDate) : start; // no end date \u2014 a single-day bill, matches only its own date
+          if (end - start > 60 * 86400000) end = start + 60 * 86400000; // same defensive cap as dayExpenseTags
+          return dayMs >= start && dayMs <= end;
+        }).map(ex => ex.category === 'Train' && ex.fromPlace && ex.toPlace ? 'Train: ' + ex.fromPlace + ' \u2192 ' + ex.toPlace : ex.category);
         const uniqueOwnTags = [...new Set(ownTags)];
         const place = t.state || t.note || '';
         return '<div style="background:' + colors.bg + '; border-left:3px solid ' + colors.border + '; padding:1px 3px; margin-top:1px; font-size:10px; line-height:1.15; color:' + colors.text + ';">' +
@@ -2430,7 +2435,10 @@ document.getElementById('expenseForm').addEventListener('submit', async (e) => {
       const ntExit = document.getElementById('expNewTripExit').value;
       if (!ntEntry || !ntExit) { statusEl.textContent = 'Please give the new trip an entry and exit date.'; statusEl.style.color = 'var(--red)'; return; }
       if (parseDate(ntExit) < parseDate(ntEntry)) { statusEl.textContent = 'The new trip\u2019s exit date is before its entry date.'; statusEl.style.color = 'var(--red)'; return; }
-      const newTrip = { id: uid(), country: ntCountry, region: mapCountryToRegion(ntCountry), state: '', entry: ntEntry, exit: ntExit, note: 'Created from a bill', evidenceOnly: true };
+      // Note left blank on purpose: the ⚠ receipt-only badge already signals "not boarding-pass-confirmed" —
+      // a generic "Created from a bill" label added nothing and, once a trip's dates get extended
+      // (e.g. from later bills or a matching flight), it repeats on every day the trip covers.
+      const newTrip = { id: uid(), country: ntCountry, region: mapCountryToRegion(ntCountry), state: '', entry: ntEntry, exit: ntExit, note: '', evidenceOnly: true };
       trips.push(newTrip);
       newTripSupersededCount = resolveOverlaps(newTrip, true); // receipt-only, so it can only ever affect other receipt-only trips
       await saveTrips();
