@@ -659,8 +659,20 @@ async function storageSetRaw(key, value) {
     suppressNextSnapshotReload = true;
     await setDoc(doc(db, ...SHARED_DOC_PATH), { [key]: value }, { merge: true });
     storageMode = 'firebase';
+    scheduleDailyBackup();
     return true;
-  } catch (e) { storageMode = 'none'; return false; }
+  } catch (e) {
+    storageMode = 'none';
+    // A save failure used to be swallowed here with no visible sign at all — the exact
+    // gap that let a bad Undo write silently fail to persist while the UI moved on as if
+    // it had succeeded. Now it's surfaced loudly, front and center, so it can never be missed.
+    console.error('Firestore save failed for "' + key + '":', e);
+    const el = document.getElementById('loadstatus');
+    const msg = '⚠ SAVE FAILED (' + key + ') — your last change may NOT be saved! ' + (e && e.message ? e.message : 'Check your connection and try again.');
+    if (el) { el.textContent = msg; el.style.color = '#a3312c'; el.style.fontWeight = 'bold'; }
+    try { alert(msg); } catch (e2) {}
+    return false;
+  }
 }
 
 function startLiveSync() {
@@ -712,6 +724,34 @@ async function loadAll() {
 function snapshotState() {
   return JSON.stringify({ trips, legs, expenses, ukThresh, uaeThresh, dayNotes });
 }
+
+// ================= automatic daily backups (separate from undo/redo) =================
+// A rolling, once-per-calendar-day snapshot written to its OWN Firestore collection, so a
+// bug or a misclick in the undo/redo mechanism (like the one on 22 Sep 2026, which silently
+// replaced the whole dataset with an old copy) can never take this down with it. Each day
+// gets its own document — it is never overwritten once the day has passed — so even if
+// today's own backup gets overwritten with bad data, yesterday's and every day before it
+// stay untouched and recoverable.
+let backupDebounceTimer = null;
+function scheduleDailyBackup() {
+  if (backupDebounceTimer) clearTimeout(backupDebounceTimer);
+  backupDebounceTimer = setTimeout(() => { writeBackupNow('auto'); }, 4000);
+}
+async function writeBackupNow(reason) {
+  try {
+    const { db, doc, setDoc } = window.__fb;
+    const dateStr = new Date().toISOString().slice(0, 10);
+    await setDoc(doc(db, 'ledgerBackups', dateStr), {
+      trips, legs, expenses, ukThresh, uaeThresh, dayNotes,
+      savedAt: new Date().toISOString(),
+      reason: reason || 'auto'
+    });
+  } catch (e) {
+    // A missed backup should never block the app or hide itself completely — log it, but
+    // don't alert, since this runs silently in the background on every save.
+    console.error('Daily backup failed:', e);
+  }
+}
 async function persistUndoRedo() {
   try { await storageSetRaw('undo-stack', JSON.stringify(undoStack)); } catch (e) {}
   try { await storageSetRaw('redo-stack', JSON.stringify(redoStack)); } catch (e) {}
@@ -724,12 +764,37 @@ async function pushUndo() {
   updateUndoButton();
   updateRedoButton();
 }
+function summarizeStateChange(from, to) {
+  // Both "trips" is a full replace, so this describes it as an addition/removal count rather
+  // than pretending it's a merge — that's the whole point: the person should see plainly
+  // that this swaps the ENTIRE dataset, not just tweaks one entry.
+  const fromExpIds = new Set(from.expenses.map(e => e.id));
+  const toExpIds = new Set(to.expenses.map(e => e.id));
+  const removedBills = from.expenses.filter(e => !toExpIds.has(e.id)).length;
+  const addedBills = to.expenses.filter(e => !fromExpIds.has(e.id)).length;
+  const fromTripIds = new Set(from.trips.map(t => t.id));
+  const toTripIds = new Set(to.trips.map(t => t.id));
+  const removedTrips = from.trips.filter(t => !toTripIds.has(t.id)).length;
+  const addedTrips = to.trips.filter(t => !fromTripIds.has(t.id)).length;
+  const parts = [];
+  if (removedBills) parts.push('remove ' + removedBills + ' bill(s)');
+  if (addedBills) parts.push('add back ' + addedBills + ' bill(s)');
+  if (removedTrips) parts.push('remove ' + removedTrips + ' trip(s)');
+  if (addedTrips) parts.push('add back ' + addedTrips + ' trip(s)');
+  return parts.length ? 'This will ' + parts.join(', ') + '.' : 'This does not change the number of bills or trips (only edits within them).';
+}
 async function performUndo() {
   const statusEl = document.getElementById('undoStatus');
   if (undoStack.length === 0) {
     if (statusEl) { statusEl.textContent = 'Nothing left to undo.'; statusEl.style.color = 'var(--ink-soft)'; }
     return;
   }
+  const previewPrev = JSON.parse(undoStack[undoStack.length - 1]);
+  const summary = summarizeStateChange({ trips, expenses }, previewPrev);
+  const ok = confirm('Undo last change?\n\n' + summary + '\n\n' +
+    (undoStack.length - 1) + ' more undo step(s) would remain after this. If this isn’t what you want, click Cancel — a wrong Undo can only be fixed with Redo immediately after.');
+  if (!ok) { if (statusEl) { statusEl.textContent = 'Undo cancelled.'; statusEl.style.color = 'var(--ink-soft)'; } return; }
+  await writeBackupNow('pre-undo'); // safety copy of the state right before this undo, regardless of today's rolling backup
   redoStack.push(snapshotState());
   if (redoStack.length > UNDO_LIMIT) redoStack.shift();
   const prev = JSON.parse(undoStack.pop());
@@ -749,6 +814,12 @@ async function performRedo() {
     if (statusEl) { statusEl.textContent = 'Nothing left to redo.'; statusEl.style.color = 'var(--ink-soft)'; }
     return;
   }
+  const previewNext = JSON.parse(redoStack[redoStack.length - 1]);
+  const summary = summarizeStateChange({ trips, expenses }, previewNext);
+  const ok = confirm('Redo?\n\n' + summary + '\n\n' +
+    (redoStack.length - 1) + ' more redo step(s) would remain after this.');
+  if (!ok) { if (statusEl) { statusEl.textContent = 'Redo cancelled.'; statusEl.style.color = 'var(--ink-soft)'; } return; }
+  await writeBackupNow('pre-redo');
   undoStack.push(snapshotState());
   if (undoStack.length > UNDO_LIMIT) undoStack.shift();
   const next = JSON.parse(redoStack.pop());
@@ -797,9 +868,19 @@ async function importBackupFile(file) {
     document.getElementById('backupStatus').textContent = 'Could not read that file \u2014 is it a backup .json from this ledger?';
     return;
   }
-  trips = Array.isArray(data.trips) ? data.trips : [];
-  legs = Array.isArray(data.legs) ? data.legs : [];
-  expenses = Array.isArray(data.expenses) ? data.expenses : [];
+  const newTrips = Array.isArray(data.trips) ? data.trips : [];
+  const newLegs = Array.isArray(data.legs) ? data.legs : [];
+  const newExpenses = Array.isArray(data.expenses) ? data.expenses : [];
+  const summary = summarizeStateChange({ trips, expenses }, { trips: newTrips, expenses: newExpenses });
+  const ok = confirm('Import this backup file?\n\n' +
+    'It has ' + newTrips.length + ' trip(s), ' + newLegs.length + ' flight(s), ' + newExpenses.length + ' bill(s), dated ' + (data.exportedAt || 'unknown') + '.\n\n' +
+    'Compared to what\u2019s live right now: ' + summary + '\n\n' +
+    'This REPLACES all of your current data. Click Cancel if you\u2019re not sure this is the right file.');
+  if (!ok) { document.getElementById('backupStatus').textContent = 'Import cancelled.'; return; }
+  await writeBackupNow('pre-import'); // safety copy of what was live right before this import overwrote it
+  trips = newTrips;
+  legs = newLegs;
+  expenses = newExpenses;
   ukThresh = data.ukThresh || 16;
   uaeThresh = data.uaeThresh || 90;
   await saveTrips(); await saveLegs(); await saveExpenses();
