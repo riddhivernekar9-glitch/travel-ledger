@@ -236,7 +236,7 @@
           <label>New trip \u2014 exit date</label>
           <input type="date" id="expNewTripExit">
         </div>
-        <p class="hint" style="flex-basis:100%; margin:2px 0 0;">A hotel booking (or any bill) is enough on its own to justify a trip \u2014 this creates it automatically, flagged as receipt-only, and attaches this bill to it in one step.</p>
+        <p class="hint" style="flex-basis:100%; margin:2px 0 0;">A hotel booking (or any bill) is enough on its own to justify a trip \u2014 this creates it automatically and attaches this bill to it in one step.</p>
       </div>
       <div>
         <label>Type</label>
@@ -416,10 +416,6 @@
       <div>
         <label>Notes (optional)</label>
         <input type="text" id="note" placeholder="e.g. client visit, or the receipt's vendor name">
-      </div>
-      <div style="flex-basis:100%; display:flex; align-items:center; gap:8px; margin-top:2px;">
-        <input type="checkbox" id="evidenceOnly" style="width:auto;">
-        <label for="evidenceOnly" style="margin:0; cursor:pointer;">This trip is only backed by a receipt/bill (no boarding pass or hotel booking) &mdash; flag it on the calendar</label>
       </div>
       <div>
         <button type="submit" id="tripSubmitBtn">Add trip</button>
@@ -1145,7 +1141,7 @@ function showDayDetailPanel(dateStr) {
     html += '<p class="hint">No trip logged for this day yet.</p>';
   } else {
     dayTrips.forEach(t => {
-      const badge = t.evidenceOnly ? ' <span style="color:var(--alert);">&#9888; receipt-only</span>' : t.derived ? ' <span style="color:var(--green);">&#9992; boarding pass</span>' : '';
+      const badge = t.derived ? ' <span style="color:var(--green);">&#9992; boarding pass</span>' : '';
       html += '<div style="border:1px solid var(--line); border-radius:4px; padding:8px 10px; margin-bottom:8px;">' +
         '<strong>' + t.country + '</strong>' + (t.state ? ', ' + t.state : '') + ' (' + t.entry + ' to ' + t.exit + ')' + badge +
         '<div style="margin-top:6px;"><button type="button" class="edit-btn" data-panel-edit-trip="' + t.id + '">edit this trip</button>' +
@@ -1356,7 +1352,9 @@ function renderCalendar() {
     const distinctCountries = new Set(allTripsToday.map(t => t.country));
     const trip = allTripsToday[0]; // used by every existing branch below, unchanged for the normal (single-trip) case
     const tags = dayExpenseTags(dateStr);
-    const tagText = tags.length > 0 ? ' (' + tags.join(', ') + ')' : '';
+    // Each category (Hotel, Taxi, Restaurant…) rendered bold so it stands out at a glance,
+    // rather than blending into the rest of the cell's text.
+    const tagText = tags.length > 0 ? ' (' + tags.map(tg => '<b>' + tg + '</b>').join(', ') + ')' : '';
     const transitChain = findTransitChainForDay(dateStr, dayMs);
     const dayNoteOverride = dayNotes[dateStr] || '';
     const cell = document.createElement('div');
@@ -1378,7 +1376,7 @@ function renderCalendar() {
         const uniqueOwnTags = [...new Set(ownTags)];
         const place = t.state || t.note || '';
         return '<div style="background:' + colors.bg + '; border-left:3px solid ' + colors.border + '; padding:1px 3px; margin-top:1px; font-size:10px; line-height:1.15; color:' + colors.text + ';">' +
-          (t.country || t.region) + (place ? ' (' + place + ')' : '') + (uniqueOwnTags.length > 0 ? ' ' + uniqueOwnTags.join(', ') : '') + '</div>';
+          (t.country || t.region) + (place ? ' (' + place + ')' : '') + (uniqueOwnTags.length > 0 ? ' ' + uniqueOwnTags.map(tg => '<b>' + tg + '</b>').join(', ') : '') + '</div>';
       }).join('');
       cell.title = allTripsToday.map(t => (t.country || t.region) + (t.state ? ', ' + t.state : '')).join(' + ') + ' \u2014 a genuine multi-country day, both count toward their own threshold. Click anywhere on this day to jump to both trips.';
       cell.style.background = 'var(--paper-card)';
@@ -1394,22 +1392,9 @@ function renderCalendar() {
       cell.style.borderWidth = '2px';
       cell.innerHTML = '<span class="dnum" style="color:#fff;">' + d + '</span>' +
         '<span class="dcountry" style="color:#fff;">&#9888; ' + transitChain + tagText + '</span>';
-    } else if (trip && trip.evidenceOnly) {
-      // Trip exists but is only backed by a receipt/bill, not a boarding pass or hotel booking.
-      // Flag it boldly on the calendar, same as an unmatched bill, so the weak evidence is obvious.
-      // If a real flight ALSO happens to be logged for this exact day, show that too \u2014 it's
-      // stronger evidence and shouldn't be hidden just because this trip is still marked receipt-only.
-      const evOnlyRoute = buildFlightDayRoute(dateStr);
-      const stateText = (dayNoteOverride || trip.state) ? ' (' + (dayNoteOverride || trip.state) + ')' : '';
-      const noteText = trip.note ? ' \u2013 ' + trip.note : '';
-      const flightPrefix = evOnlyRoute ? '\u2708 ' + evOnlyRoute + ' \u2014 ' : '';
-      cell.title = flightPrefix + (trip.country || trip.region) + (trip.state ? ', ' + trip.state : '') + ' \u2014 receipt-only evidence' + noteText + tagText;
-      cell.style.background = 'var(--alert)';
-      cell.style.borderColor = 'var(--alert)';
-      cell.style.borderWidth = '2px';
-      cell.innerHTML = '<span class="dnum" style="color:#fff;">' + d + '</span>' +
-        '<span class="dcountry" style="color:#fff;">' + (evOnlyRoute ? '\u2708 ' + evOnlyRoute + ' \u2014 ' : '') + '&#9888; ' + (trip.country || trip.region) + stateText + noteText + tagText + '</span>';
     } else if (trip) {
+      // A trip is a trip whether it's backed by a boarding pass or by a bill/receipt \u2014 he was
+      // legitimately present either way, so both render identically here, no alarm styling.
       const colors = REGION_COLORS[trip.region] || REGION_COLORS.Other;
       const route = buildFlightDayRoute(dateStr);
       const isFlightDay = !!route;
@@ -1446,11 +1431,10 @@ function renderCalendar() {
     } else {
       cell.innerHTML = '<span class="dnum">' + d + '</span>';
     }
-    // A small pencil in the corner of any day that has a trip \u2014 click it to label just that
-    // one day (e.g. "Miami") without needing to split or restructure the trip itself at all.
-    // Skipped on genuine multi-country days, since that cell is already busy with two lines.
-    if (trip && distinctCountries.size <= 1) {
-      const pencilTitle = dayNoteOverride ? 'Change the label for just this day (currently \u201c' + dayNoteOverride + '\u201d)' : 'Label just this day \u2014 e.g. a specific city a receipt reveals, without splitting the trip';
+    // A small pencil in the corner of EVERY day, no matter what \u2014 a trip, no trip, or a
+    // genuine multi-country day \u2014 so a remark can always be added right there, on any date.
+    {
+      const pencilTitle = dayNoteOverride ? 'Change the label for just this day (currently \u201c' + dayNoteOverride + '\u201d)' : 'Label just this day \u2014 e.g. a specific city a receipt reveals, or any remark';
       cell.insertAdjacentHTML('beforeend',
         '<span class="day-note-pencil" title="' + pencilTitle + '" style="position:absolute; top:1px; right:1px; z-index:5; cursor:pointer; ' +
         'width:14px; height:14px; display:flex; align-items:center; justify-content:center; font-size:9px; ' +
@@ -1574,8 +1558,7 @@ function refreshTripCardDisplay(tripId) {
   const t = trips.find(x => x.id === tripId);
   if (!t) return;
   const billCount = expenses.filter(ex => ex.tripId === t.id).length;
-  const badges = (t.evidenceOnly ? ' <span style="color:var(--alert); font-weight:bold;">&#9888; receipt-only</span>' : '') +
-    (t.derived ? ' <span style="color:var(--green); font-weight:bold;">&#9992; boarding pass</span>' : '');
+  const badges = (t.derived ? ' <span style="color:var(--green); font-weight:bold;">&#9992; boarding pass</span>' : '');
   const header = card.querySelector('.trip-card-header');
   const arrow = header.querySelector('.trip-card-arrow').outerHTML;
   header.innerHTML =
@@ -1611,8 +1594,7 @@ function renderTable() {
     card.setAttribute('data-trip-row', t.id);
     card.className = 'trip-card';
     card.style.cssText = 'border:1px solid var(--line); border-radius:4px; margin-bottom:8px; background:var(--paper-card); overflow:hidden;';
-    const badges = (t.evidenceOnly ? ' <span style="color:var(--alert); font-weight:bold;">&#9888; receipt-only</span>' : '') +
-      (t.derived ? ' <span style="color:var(--green); font-weight:bold;">&#9992; boarding pass</span>' : '');
+    const badges = (t.derived ? ' <span style="color:var(--green); font-weight:bold;">&#9992; boarding pass</span>' : '');
     const billCount = expenses.filter(ex => ex.tripId === t.id).length;
     const header = document.createElement('div');
     header.className = 'trip-card-header';
@@ -1665,7 +1647,6 @@ function renderTripCardBody(container, t) {
     document.getElementById('entryDate').value = t.entry;
     document.getElementById('exitDate').value = t.exit;
     document.getElementById('note').value = t.note || '';
-    document.getElementById('evidenceOnly').checked = !!t.evidenceOnly;
     document.getElementById('tripSubmitBtn').textContent = 'Update trip';
     document.getElementById('tripCancelBtn').style.display = 'inline-block';
     document.getElementById('advancedDetails').open = true; // this form lives inside the collapsed "Advanced" section — open it first, or scrollIntoView has nothing visible to scroll to
@@ -1730,7 +1711,6 @@ function resetTripForm() {
   document.getElementById('entryDate').value = '';
   document.getElementById('exitDate').value = '';
   document.getElementById('note').value = '';
-  document.getElementById('evidenceOnly').checked = false;
   const submitBtn = document.getElementById('tripSubmitBtn');
   submitBtn.textContent = 'Add trip';
   submitBtn.disabled = false; submitBtn.style.opacity = '1'; submitBtn.style.cursor = 'pointer';
@@ -2381,7 +2361,13 @@ document.getElementById('entryForm').addEventListener('submit', async (e) => {
   const entry = document.getElementById('entryDate').value;
   const exit = document.getElementById('exitDate').value;
   const note = document.getElementById('note').value;
-  const evidenceOnly = document.getElementById('evidenceOnly').checked;
+  // No more manual "backed by receipt only" choice — a trip you add here is simply a real
+  // stay, boarding pass or not. New trips default to evidenceOnly:true only so that if a real
+  // boarding pass for the same dates shows up later, it can still supersede a manual guess
+  // (existing behavior, kept for merge safety); editing an existing trip keeps whatever it
+  // already was rather than silently downgrading a flight-confirmed trip.
+  const existingTrip = editId ? trips.find(t => t.id === editId) : null;
+  const evidenceOnly = existingTrip ? !!existingTrip.evidenceOnly : true;
   if (!entry || !exit) return;
   if (parseDate(exit) < parseDate(entry)) { alert('Exit date is before entry date.'); return; }
   submitBtn.disabled = true; submitBtn.style.opacity = '0.6'; submitBtn.style.cursor = 'wait';
