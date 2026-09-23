@@ -2391,6 +2391,11 @@ document.getElementById('entryForm').addEventListener('submit', async (e) => {
       if (idx > -1) {
         const newId = editId.startsWith('derived-') ? uid() : editId;
         savedTrip = { id: newId, country, region, state, entry, exit, note, evidenceOnly };
+        // A trip built from an actual boarding pass carries derived:true, which is what puts the
+        // green "✈ boarding pass" badge on it. This field used to get silently dropped here on
+        // every edit, so simply extending a real flight-backed trip's dates (e.g. to match a hotel's
+        // checkout date) made it look like the boarding pass evidence had vanished. Carry it forward.
+        if (trips[idx].derived) savedTrip.derived = true;
         trips[idx] = savedTrip;
       }
     } else {
