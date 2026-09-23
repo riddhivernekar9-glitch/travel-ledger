@@ -1141,7 +1141,7 @@ function showDayDetailPanel(dateStr) {
     html += '<p class="hint">No trip logged for this day yet.</p>';
   } else {
     dayTrips.forEach(t => {
-      const badge = t.derived ? ' <span style="color:var(--green);">&#9992; boarding pass</span>' : '';
+      const badge = (t.derived || t.fromBoardingPass) ? ' <span style="color:var(--green);">&#9992; boarding pass</span>' : '';
       html += '<div style="border:1px solid var(--line); border-radius:4px; padding:8px 10px; margin-bottom:8px;">' +
         '<strong>' + t.country + '</strong>' + (t.state ? ', ' + t.state : '') + ' (' + t.entry + ' to ' + t.exit + ')' + badge +
         '<div style="margin-top:6px;"><button type="button" class="edit-btn" data-panel-edit-trip="' + t.id + '">edit this trip</button>' +
@@ -1558,7 +1558,7 @@ function refreshTripCardDisplay(tripId) {
   const t = trips.find(x => x.id === tripId);
   if (!t) return;
   const billCount = expenses.filter(ex => ex.tripId === t.id).length;
-  const badges = (t.derived ? ' <span style="color:var(--green); font-weight:bold;">&#9992; boarding pass</span>' : '');
+  const badges = ((t.derived || t.fromBoardingPass) ? ' <span style="color:var(--green); font-weight:bold;">&#9992; boarding pass</span>' : '');
   const header = card.querySelector('.trip-card-header');
   const arrow = header.querySelector('.trip-card-arrow').outerHTML;
   header.innerHTML =
@@ -1594,7 +1594,7 @@ function renderTable() {
     card.setAttribute('data-trip-row', t.id);
     card.className = 'trip-card';
     card.style.cssText = 'border:1px solid var(--line); border-radius:4px; margin-bottom:8px; background:var(--paper-card); overflow:hidden;';
-    const badges = (t.derived ? ' <span style="color:var(--green); font-weight:bold;">&#9992; boarding pass</span>' : '');
+    const badges = ((t.derived || t.fromBoardingPass) ? ' <span style="color:var(--green); font-weight:bold;">&#9992; boarding pass</span>' : '');
     const billCount = expenses.filter(ex => ex.tripId === t.id).length;
     const header = document.createElement('div');
     header.className = 'trip-card-header';
@@ -2391,11 +2391,14 @@ document.getElementById('entryForm').addEventListener('submit', async (e) => {
       if (idx > -1) {
         const newId = editId.startsWith('derived-') ? uid() : editId;
         savedTrip = { id: newId, country, region, state, entry, exit, note, evidenceOnly };
-        // A trip built from an actual boarding pass carries derived:true, which is what puts the
-        // green "✈ boarding pass" badge on it. This field used to get silently dropped here on
-        // every edit, so simply extending a real flight-backed trip's dates (e.g. to match a hotel's
-        // checkout date) made it look like the boarding pass evidence had vanished. Carry it forward.
-        if (trips[idx].derived) savedTrip.derived = true;
+        // Editing a trip that was built from a boarding pass turns it into a hand-kept trip.
+        // It must NOT keep derived:true — every page load deletes all derived trips and rebuilds
+        // them from the flights, which silently threw this edit away (the "I extended the trip
+        // and it went back" bug). fromBoardingPass keeps the green badge instead, and the rebuild
+        // then leaves this stretch alone because a hand-kept trip already covers it.
+        if (trips[idx].derived || trips[idx].fromBoardingPass) savedTrip.fromBoardingPass = true;
+        // Bills attached to the old trip id follow the trip to its new id.
+        if (newId !== editId) expenses.forEach(ex => { if (ex.tripId === editId) ex.tripId = newId; });
         trips[idx] = savedTrip;
       }
     } else {
@@ -2404,7 +2407,7 @@ document.getElementById('entryForm').addEventListener('submit', async (e) => {
     }
     const adjustedCount = savedTrip ? resolveOverlaps(savedTrip, !!savedTrip.evidenceOnly) : 0;
     await saveTrips();
-    if (adjustedCount > 0) await saveExpenses();
+    await saveExpenses(); // bills may have moved to a new trip id above
     resetTripForm();
     renderAll();
     populateCloseYearSelect();
