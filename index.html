@@ -1883,7 +1883,7 @@ function buildTripsFromLegs() {
   });
   const manualCountAfter = trips.filter(t => !t.derived).length;
   const supersededCount = manualCountBefore - manualCountAfter;
-  Promise.all([saveTrips(), saveExpenses()]).then(() => {
+  return Promise.all([saveTrips(), saveExpenses()]).then(() => {
     renderAll(); populateCloseYearSelect();
     cachedGapsUncovered = gapsUncovered;
     cachedGapsCovered = gapsCovered;
@@ -1893,6 +1893,51 @@ function buildTripsFromLegs() {
       (supersededCount > 0 ? ' ' + supersededCount + ' manual/receipt-only entr' + (supersededCount === 1 ? 'y was' : 'ies were') + ' replaced by newly confirmed flight(s).' : '') +
       (skippedForManualOverride > 0 ? ' ' + skippedForManualOverride + ' flight-derived stretch' + (skippedForManualOverride === 1 ? '' : 'es') + ' left untouched because you\u2019ve already corrected ' + (skippedForManualOverride === 1 ? 'it' : 'them') + ' by hand.' : '');
   });
+}
+
+// ================= bills keep their trip's dates honest =================
+// A bill proves presence in its trip's country on the bill's dates (a hotel from check-in to
+// check-out, a restaurant on its date). So when a bill falls outside its trip, the trip is
+// stretched to cover it, instead of leaving uncovered magenta days that no amount of deleting
+// and re-adding the bill could ever clear. Returns true if any trip changed.
+const MAX_AUTO_EXTEND_DAYS = 45; // a bill further out than this is more likely attached to the wrong trip — leave it flagged
+function extendTripToCoverBill(ex) {
+  if (!ex || !ex.date || !ex.tripId) return false;
+  const idx = trips.findIndex(t => t.id === ex.tripId);
+  if (idx === -1) return false;
+  const trip = trips[idx];
+  const start = parseDate(ex.date);
+  let end = ex.endDate ? parseDate(ex.endDate) : start;
+  if (end < start) end = start;
+  const tEntry = parseDate(trip.entry), tExit = parseDate(trip.exit);
+  if (start >= tEntry && end <= tExit) return false;
+  const newEntry = Math.min(start, tEntry), newExit = Math.max(end, tExit);
+  const addedDays = ((tEntry - newEntry) + (newExit - tExit)) / 86400000;
+  if (addedDays > MAX_AUTO_EXTEND_DAYS) return false;
+  let saved;
+  if (trip.derived) {
+    // Flight-built trips are rebuilt from scratch on every load, so a stretched one has to become
+    // a hand-kept trip (keeping its boarding-pass badge) or the change would vanish on reload.
+    saved = { id: uid(), country: trip.country, region: trip.region, state: trip.state || '', entry: fmt(newEntry), exit: fmt(newExit), note: trip.note || '', evidenceOnly: false, fromBoardingPass: true };
+    expenses.forEach(e => { if (e.tripId === trip.id) e.tripId = saved.id; });
+    trips[idx] = saved;
+  } else {
+    trip.entry = fmt(newEntry); trip.exit = fmt(newExit);
+    saved = trip;
+  }
+  resolveOverlaps(saved, !!saved.evidenceOnly);
+  return true;
+}
+function extendTripsToCoverAllBills() {
+  let changed = false;
+  // Loop because stretching one trip can merge another trip (and its bills) into it.
+  for (let pass = 0; pass < 5; pass++) {
+    let changedThisPass = false;
+    expenses.forEach(ex => { if (extendTripToCoverBill(ex)) changedThisPass = true; });
+    if (!changedThisPass) break;
+    changed = true;
+  }
+  return changed;
 }
 
 // ================= expenses =================
@@ -2547,12 +2592,15 @@ document.getElementById('expenseForm').addEventListener('submit', async (e) => {
     } else {
       expenses.push({ id: uid(), tripId, category, vendor, date: date || null, endDate, fromPlace: fromPlace || null, toPlace: toPlace || null, uaeResidence, amount: amountRaw === '' ? null : Number(amountRaw), currency: currency || null });
     }
+    const savedBill = editId ? expenses.find(x => x.id === editId) : expenses[expenses.length - 1];
+    const tripStretched = extendTripToCoverBill(savedBill);
+    if (tripStretched) await saveTrips();
     await saveExpenses();
     resetExpenseForm();
     renderExpenseTable();
     renderCalendar();
     renderTripBillMismatchWarnings();
-    if (createdNewTrip) {
+    if (createdNewTrip || tripStretched) {
       renderTable(); renderNeedsPassList(); renderDuplicateWarnings(); populateExpTripSelect();
     } else {
       refreshTripCardDisplay(tripId);
@@ -2638,7 +2686,35 @@ async function initLedger() {
   updateUndoButton();
   updateRedoButton();
   updateYearFilterLabel();
-  if (legs.length > 0) buildTripsFromLegs();
+  if (legs.length > 0) await buildTripsFromLegs();
+  // Every bill's days covered by its own trip (see extendTripToCoverBill). Done on load too, so
+  // data logged before this rule existed is repaired without anyone having to redo anything.
+  // One-time only: after this, a trip you deliberately shorten stays shortened.
+  if (!(await storageGetRaw('bill-cover-repair-v1'))) {
+    const beforeRepair = snapshotState();
+    if (extendTripsToCoverAllBills()) {
+      undoStack.push(beforeRepair); // so the repair itself can be undone like any other change
+      if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+      await persistUndoRedo(); updateUndoButton();
+      await saveTrips(); await saveExpenses();
+      renderAll(); populateCloseYearSelect();
+      const beforeTrips = JSON.parse(beforeRepair).trips;
+      const label = t => t.country + (t.state ? ' (' + t.state + ')' : '') + ': ' + t.entry + ' to ' + t.exit;
+      const stretched = trips.filter(t => !t.derived).map(t => {
+        const inside = o => o.country === t.country && parseDate(o.entry) >= parseDate(t.entry) && parseDate(o.exit) <= parseDate(t.exit) && (o.entry !== t.entry || o.exit !== t.exit);
+        const old = beforeTrips.find(o => o.id === t.id) ||
+          (t.fromBoardingPass && beforeTrips.find(o => o.derived && inside(o))) || beforeTrips.find(inside);
+        return old && (old.entry !== t.entry || old.exit !== t.exit) ? '\u2022 ' + label(old) + '  \u2192  now ' + t.entry + ' to ' + t.exit : null;
+      }).filter(Boolean);
+      try {
+        alert('One-time tidy-up: some bills fell outside the dates of the trip they belong to, which is what was turning those days magenta. ' +
+          'These trips were stretched to cover their bills:\n\n' + (stretched.slice(0, 25).join('\n') || '(see calendar)') +
+          (stretched.length > 25 ? '\n\u2026and ' + (stretched.length - 25) + ' more' : '') +
+          '\n\nIf anything here looks wrong, click Undo once to reverse the whole tidy-up.');
+      } catch (e) {}
+    }
+    await storageSetRaw('bill-cover-repair-v1', new Date().toISOString());
+  }
   startLiveSync();
 }
 window.addEventListener('ledger-signed-in', initLedger);
