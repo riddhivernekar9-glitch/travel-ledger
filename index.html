@@ -1266,6 +1266,38 @@ function closeDayDetailPanel() {
 }
 document.getElementById('dayDetailOverlay').onclick = closeDayDetailPanel;
 
+// "He was in <country> on these days" — no bill, no flight needed. Joins onto a hand-kept trip in
+// the same country that ends the day before or starts the day after, so marking days one by one
+// grows a single trip instead of leaving a string of one-day trips.
+async function markPresent(country, fromStr, toStr) {
+  const from = parseDate(fromStr), to = parseDate(toStr);
+  if (!country || isNaN(from) || isNaN(to) || to < from) return false;
+  await pushUndo();
+  const DAY = 86400000;
+  const before = trips.find(t => !t.derived && t.country === country && parseDate(t.exit) >= from - DAY && parseDate(t.entry) < from);
+  const after = trips.find(t => !t.derived && t.country === country && parseDate(t.entry) <= to + DAY && parseDate(t.exit) > to && t !== before);
+  let kept;
+  if (before) {
+    kept = before;
+    if (parseDate(kept.exit) < to) kept.exit = fmt(to);
+  } else if (after) {
+    kept = after;
+    if (parseDate(kept.entry) > from) kept.entry = fmt(from);
+  } else {
+    kept = { id: uid(), country, region: mapCountryToRegion(country), state: '', entry: fmt(from), exit: fmt(to), note: '', evidenceOnly: false };
+    trips.push(kept);
+  }
+  if (before && after) { // the new days bridge two trips: join them into one
+    kept.exit = after.exit;
+    expenses.forEach(ex => { if (ex.tripId === after.id) ex.tripId = kept.id; });
+    trips = trips.filter(t => t !== after);
+  }
+  kept.evidenceOnly = false;
+  resolveOverlaps(kept, false); // absorbs any same-country trip now inside these dates (bills follow)
+  await saveTrips(); await saveExpenses();
+  renderAll(); populateCloseYearSelect();
+  return true;
+}
 function showDayDetailPanel(dateStr) {
   const dayMs = parseDate(dateStr);
   const dayTrips = trips.filter(t => overlapDays(t.entry, t.exit, dayMs, dayMs) > 0);
@@ -1313,6 +1345,20 @@ function showDayDetailPanel(dateStr) {
     });
   }
 
+  // Quickest way to record presence without a bill (e.g. small receipts not worth logging).
+  // Country defaults to whichever trip is closest in time, which is almost always the right one.
+  const nearest = trips.filter(t => !dayTrips.includes(t)).map(t => ({ t, gap: Math.min(Math.abs(parseDate(t.entry) - dayMs), Math.abs(parseDate(t.exit) - dayMs)) }))
+    .sort((a, b) => a.gap - b.gap)[0];
+  const defaultCountry = dayTrips[0] ? dayTrips[0].country : nearest ? nearest.t.country : 'United Arab Emirates';
+  html += '<div style="margin-top:14px; padding:10px; border:1px solid var(--line); border-radius:4px; background:var(--paper-card);">' +
+    '<div style="font-weight:bold; margin-bottom:6px;">Was there, no bill needed</div>' +
+    '<div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center; font-size:13px;">' +
+    '<select id="dayMarkCountry" style="max-width:220px;">' + WORLD_COUNTRIES.map(c => '<option value="' + c + '"' + (c === defaultCountry ? ' selected' : '') + '>' + c + '</option>').join('') + '</select>' +
+    '<span>from</span><input type="date" id="dayMarkFrom" value="' + dateStr + '" style="width:auto;">' +
+    '<span>to</span><input type="date" id="dayMarkTo" value="' + dateStr + '" style="width:auto;">' +
+    '<button type="button" class="btn-primary" id="dayMarkBtn">Mark as there</button></div>' +
+    '<div class="hint" id="dayMarkStatus" style="margin-top:4px;">Joins onto a trip in the same country right before or after, if there is one.</div></div>';
+
   html += '<div style="margin-top:14px; display:flex; gap:8px; flex-wrap:wrap;">' +
     '<button type="button" class="btn-primary" id="dayDetailAddBill">+ add a bill for this day</button>' +
     '<button type="button" class="btn-secondary" id="dayDetailAddLeg">+ add a boarding pass for this day</button>' +
@@ -1325,6 +1371,16 @@ function showDayDetailPanel(dateStr) {
   panel.style.display = 'block';
 
   document.getElementById('dayDetailClose').onclick = closeDayDetailPanel;
+  document.getElementById('dayMarkBtn').onclick = async () => {
+    const country = document.getElementById('dayMarkCountry').value;
+    const from = document.getElementById('dayMarkFrom').value, to = document.getElementById('dayMarkTo').value || from;
+    const st = document.getElementById('dayMarkStatus');
+    if (!from || parseDate(to) < parseDate(from)) { st.textContent = 'Check the dates: "to" is before "from".'; st.style.color = 'var(--red)'; return; }
+    if ((parseDate(to) - parseDate(from)) / 86400000 > 60) { st.textContent = 'That is more than 60 days. Use the trip form under Advanced for long stays.'; st.style.color = 'var(--red)'; return; }
+    document.getElementById('dayMarkBtn').disabled = true;
+    await markPresent(country, from, to);
+    showDayDetailPanel(dateStr); // reopen with the updated trip showing
+  };
 
   panel.querySelectorAll('[data-panel-edit-trip]').forEach(btn => {
     btn.onclick = () => { closeDayDetailPanel(); expandTripCardAndEdit(btn.dataset.panelEditTrip); };
@@ -1618,10 +1674,10 @@ function renderCalendar() {
       document.getElementById('expenseForm').scrollIntoView({ behavior: 'smooth', block: 'center' });
     };
     }
-    if (trip || tags.length > 0) {
-      cell.classList.add('has-entry');
-      cell.onclick = (e) => { if (e.target.closest('.day-note-pencil') || e.target.closest('.day-add-bill')) return; showDayDetailPanel(dateStr); };
-    }
+    if (trip || tags.length > 0) cell.classList.add('has-entry');
+    // Every day opens the day popup, including blank ones, so a day can be marked "was there" directly.
+    cell.style.cursor = 'pointer';
+    cell.onclick = (e) => { if (e.target.closest('.day-note-pencil') || e.target.closest('.day-add-bill')) return; showDayDetailPanel(dateStr); };
     grid.appendChild(cell);
   }
   document.getElementById('calLegend').innerHTML = Object.entries(REGION_COLORS).map(([region, c]) =>
