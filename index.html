@@ -1221,16 +1221,27 @@ function buildFlightDayRoute(dateStr) {
   return parts.join(' \u2192 ');
 }
 
+// The days a bill proves presence on. A hotel covers the NIGHTS stayed: check-in through the
+// day before check-out. The check-out day itself isn't counted from the hotel bill — you leave
+// that day, and if you're still in the country, a flight or another bill covers it. Any other bill
+// covers its own date (or its full range, e.g. a car rental). Capped at 60 days so one bad
+// check-out date can't shade months of the calendar.
+function billRange(ex) {
+  const start = parseDate(ex.date);
+  let end = ex.endDate ? parseDate(ex.endDate) : start;
+  if (ex.category === 'Hotel' && end > start) end -= 86400000;
+  if (end < start) end = start;
+  if (end - start > 60 * 86400000) end = start + 60 * 86400000;
+  return { start, end };
+}
+function billCoversDay(ex, dayMs) {
+  if (!ex.date) return false;
+  const r = billRange(ex);
+  return dayMs >= r.start && dayMs <= r.end;
+}
 function dayExpenseTags(dateStr) {
   const dayMs = parseDate(dateStr);
-  const raw = expenses.filter(ex => {
-    if (!ex.date) return false;
-    const start = parseDate(ex.date);
-    let end = ex.endDate ? parseDate(ex.endDate) : start;
-    // Defensive cap: a stray/bad check-out date should never shade months of the calendar.
-    if (end - start > 60 * 86400000) end = start + 60 * 86400000;
-    return dayMs >= start && dayMs <= end;
-  }).map(ex => {
+  const raw = expenses.filter(ex => billCoversDay(ex, dayMs)).map(ex => {
     if (ex.category === 'Train' && ex.fromPlace && ex.toPlace) return 'Train: ' + ex.fromPlace + ' \u2192 ' + ex.toPlace;
     return ex.category;
   });
@@ -1258,13 +1269,7 @@ document.getElementById('dayDetailOverlay').onclick = closeDayDetailPanel;
 function showDayDetailPanel(dateStr) {
   const dayMs = parseDate(dateStr);
   const dayTrips = trips.filter(t => overlapDays(t.entry, t.exit, dayMs, dayMs) > 0);
-  const dayBills = expenses.filter(ex => {
-    if (!ex.date) return false;
-    const start = parseDate(ex.date);
-    let end = ex.endDate ? parseDate(ex.endDate) : start;
-    if (end - start > 60 * 86400000) end = start + 60 * 86400000;
-    return dayMs >= start && dayMs <= end;
-  });
+  const dayBills = expenses.filter(ex => billCoversDay(ex, dayMs));
   const dayLegs = chainAwareSortLegs(legs.filter(l => l.depDate === dateStr || l.arrDate === dateStr));
   const route = buildFlightDayRoute(dateStr);
 
@@ -1440,13 +1445,7 @@ function jumpToDate(dateStr) {
   const dayMs = parseDate(dateStr);
   const matchingLegs = legs.filter(l => l.depDate === dateStr || l.arrDate === dateStr);
   const matchingTrips = trips.filter(t => overlapDays(t.entry, t.exit, dayMs, dayMs) > 0);
-  const matchingExpenses = expenses.filter(ex => {
-    if (!ex.date) return false;
-    const start = parseDate(ex.date);
-    let end = ex.endDate ? parseDate(ex.endDate) : start;
-    if (end - start > 60 * 86400000) end = start + 60 * 86400000; // same defensive cap as the calendar itself
-    return dayMs >= start && dayMs <= end;
-  });
+  const matchingExpenses = expenses.filter(ex => billCoversDay(ex, dayMs));
   const rowsToHighlight = [];
 
   matchingLegs.forEach(l => {
@@ -1515,13 +1514,7 @@ function renderCalendar() {
       // so show each one on its own line rather than picking just one to display.
       const lines = allTripsToday.map(t => {
         const colors = REGION_COLORS[t.region] || REGION_COLORS.Other;
-        const ownTags = expenses.filter(ex => {
-          if (!(ex.tripId === t.id && ex.date)) return false;
-          const start = parseDate(ex.date);
-          let end = ex.endDate ? parseDate(ex.endDate) : start; // no end date \u2014 a single-day bill, matches only its own date
-          if (end - start > 60 * 86400000) end = start + 60 * 86400000; // same defensive cap as dayExpenseTags
-          return dayMs >= start && dayMs <= end;
-        }).map(ex => ex.category === 'Train' && ex.fromPlace && ex.toPlace ? 'Train: ' + ex.fromPlace + ' \u2192 ' + ex.toPlace : ex.category);
+        const ownTags = expenses.filter(ex => ex.tripId === t.id && billCoversDay(ex, dayMs)).map(ex => ex.category === 'Train' && ex.fromPlace && ex.toPlace ? 'Train: ' + ex.fromPlace + ' \u2192 ' + ex.toPlace : ex.category);
         const uniqueOwnTags = [...new Set(ownTags)];
         const place = t.state || t.note || '';
         return '<div style="background:' + colors.bg + '; border-left:3px solid ' + colors.border + '; padding:1px 3px; margin-top:1px; font-size:10px; line-height:1.15; color:' + colors.text + ';">' +
@@ -2055,9 +2048,7 @@ function extendTripToCoverBill(ex) {
   const idx = trips.findIndex(t => t.id === ex.tripId);
   if (idx === -1) return false;
   const trip = trips[idx];
-  const start = parseDate(ex.date);
-  let end = ex.endDate ? parseDate(ex.endDate) : start;
-  if (end < start) end = start;
+  const { start, end } = billRange(ex);
   const tEntry = parseDate(trip.entry), tExit = parseDate(trip.exit);
   if (start >= tEntry && end <= tExit) return false;
   const newEntry = Math.min(start, tEntry), newExit = Math.max(end, tExit);
@@ -2076,6 +2067,27 @@ function extendTripToCoverBill(ex) {
   }
   resolveOverlaps(saved, !!saved.evidenceOnly);
   return true;
+}
+// Trips that end on a hotel CHECK-OUT day with nothing else placing you in that country that
+// day. Earlier versions treated the check-out day as a night stayed and stretched trips to it;
+// this pulls those trips back to the last night actually stayed. It never touches a day that a
+// flight, another bill, or a day label ties to that country. Returns the list of changes.
+function trimTripsEndingOnCheckout() {
+  const changes = [];
+  trips.forEach(t => {
+    if (t.derived || t.entry === t.exit) return;
+    const exitMs = parseDate(t.exit);
+    const hotelsOut = expenses.filter(ex => ex.tripId === t.id && ex.category === 'Hotel' && ex.date && ex.endDate === t.exit && ex.endDate !== ex.date);
+    if (hotelsOut.length === 0) return;
+    const sameCountryTripIds = new Set(trips.filter(o => o.country === t.country).map(o => o.id));
+    if (expenses.some(ex => sameCountryTripIds.has(ex.tripId) && billCoversDay(ex, exitMs))) return; // another bill puts you there that day
+    if (legs.some(l => (l.from === t.country && l.depDate === t.exit) || (l.to === t.country && l.arrDate === t.exit))) return; // a flight that day
+    if (dayNotes[t.exit]) return; // you labelled that day yourself
+    const before = t.country + (t.state ? ' (' + t.state + ')' : '') + ': ' + t.entry + ' to ' + t.exit;
+    t.exit = fmt(exitMs - 86400000);
+    changes.push('\u2022 ' + before + '  \u2192  now ends ' + t.exit);
+  });
+  return changes;
 }
 function extendTripsToCoverAllBills() {
   let changed = false;
@@ -2213,8 +2225,16 @@ function autofillNewTripDatesFromBill() {
   const billEndDate = document.getElementById('expEndDate').value;
   const tripEntry = document.getElementById('expNewTripEntry');
   const tripExit = document.getElementById('expNewTripExit');
-  if (billDate && !tripEntry.value) tripEntry.value = billDate;
-  if ((billEndDate || billDate) && !tripExit.value) tripExit.value = billEndDate || billDate;
+  // Fill in (and keep following the bill) unless the person has typed their own date there.
+  // Previously the exit was filled once from the check-in date and then never updated when
+  // the check-out was entered, so a new trip for a 3-night hotel ended on the check-in day.
+  const autoOk = el => !el.value || el.dataset.autofilled === el.value;
+  if (billDate && autoOk(tripEntry)) { tripEntry.value = billDate; tripEntry.dataset.autofilled = billDate; }
+  if (billDate && autoOk(tripExit)) {
+    const cat = document.getElementById('expCategory').value;
+    tripExit.value = billEndDate ? fmt(billRange({ category: cat, date: billDate, endDate: billEndDate }).end) : billDate;
+    tripExit.dataset.autofilled = tripExit.value;
+  }
 }
 document.getElementById('expDate').addEventListener('change', autofillNewTripDatesFromBill);
 document.getElementById('expEndDate').addEventListener('change', autofillNewTripDatesFromBill);
@@ -2385,7 +2405,7 @@ async function backfillTripsFromHotelBills() {
   let createdCount = 0;
   hotelBills.forEach(ex => {
     const start = ex.date;
-    const end = ex.endDate || ex.date;
+    const end = fmt(billRange(ex).end); // last night stayed, not the check-out day
     const currentTrip = trips.find(t => t.id === ex.tripId);
     if (!currentTrip) return; // orphaned bill, unrelated to this
     if (!currentTrip.evidenceOnly) return; // never touch a flight-confirmed trip
@@ -2863,6 +2883,25 @@ async function initLedger() {
       } catch (e) {}
     }
     await storageSetRaw('bill-cover-repair-v1', new Date().toISOString());
+  }
+  // One-time: hotel check-out days are no longer counted as nights stayed (see billRange).
+  if (!(await storageGetRaw('checkout-trim-v1'))) {
+    const beforeTrim = snapshotState();
+    const trimmed = trimTripsEndingOnCheckout();
+    if (trimmed.length > 0) {
+      undoStack.push(beforeTrim);
+      if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+      await persistUndoRedo(); updateUndoButton();
+      await saveTrips();
+      renderAll(); populateCloseYearSelect();
+      try {
+        alert('One-time fix: hotel check-out days are no longer counted as a night stayed. ' +
+          'These trips ended on a check-out day with nothing else (no flight, no other bill) placing you there that day, so they now end on the last night stayed:\n\n' +
+          trimmed.slice(0, 25).join('\n') + (trimmed.length > 25 ? '\n\u2026and ' + (trimmed.length - 25) + ' more' : '') +
+          '\n\nIf anything here looks wrong, click Undo once to reverse this fix.');
+      } catch (e) {}
+    }
+    await storageSetRaw('checkout-trim-v1', new Date().toISOString());
   }
   startLiveSync();
 }
