@@ -203,6 +203,7 @@
 
   <div class="step">
     <h2>Calendar</h2>
+    <div id="uncoveredDaysCheck" style="margin-bottom:10px;"></div>
     <div class="cal-nav">
       <button type="button" id="calPrev">&larr;</button>
       <div class="cal-month-label" id="calMonthLabel"></div>
@@ -825,7 +826,9 @@ function startLiveSync() {
   onSnapshot(doc(db, ...SHARED_DOC_PATH), (snap) => {
     if (suppressNextSnapshotReload) { suppressNextSnapshotReload = false; return; }
     if (!snap.exists()) return;
-    firestoreCache = snap.data();
+    const incoming = snap.data();
+    if (firestoreCache && JSON.stringify(incoming) === JSON.stringify(firestoreCache)) return; // nothing actually changed
+    firestoreCache = incoming;
     loadAll().then(() => {
       renderAll();
       populateCloseYearSelect();
@@ -845,6 +848,7 @@ async function loadAll() {
   try {
     const v = await storageGetRaw('legs-list');
     legs = v ? JSON.parse(v) : [];
+    const legsBefore = JSON.stringify(legs);
     // Migrate legs saved under an older schema (single "date"/"note" fields)
     // to the current depDate/arrDate/depCity/arrCity structure.
     legs = legs.map(l => ({
@@ -856,7 +860,10 @@ async function loadAll() {
       arrDate: l.arrDate || l.date || l.depDate || '',
       arrCity: l.arrCity || l.note || ''
     })).filter(l => l.depDate && l.arrDate && l.from && l.to);
-    await saveLegs();
+    // Only write back if the migration actually changed something. Writing on EVERY load meant
+    // two open copies of the app (two tabs, or two people) kept triggering each other's reload
+    // in an endless loop, which can freeze the page.
+    if (JSON.stringify(legs) !== legsBefore) await saveLegs();
   } catch (e) { legs = []; }
   try { const v = await storageGetRaw('expenses-list'); expenses = v ? JSON.parse(v) : []; } catch (e) { expenses = []; }
   try { const v = await storageGetRaw('day-notes'); dayNotes = v ? JSON.parse(v) : {}; } catch (e) { dayNotes = {}; }
@@ -1538,7 +1545,46 @@ function jumpToDate(dateStr) {
   });
 }
 
+// Health check over ALL years: every day that has a bill but no trip. Shown above the calendar
+// so a problem anywhere is visible at once, without paging through months to find magenta days.
+function renderUncoveredDaysCheck() {
+  const el = document.getElementById('uncoveredDaysCheck');
+  if (!el) return;
+  const days = new Set();
+  expenses.forEach(ex => {
+    if (!ex.date) return;
+    const r = billRange(ex);
+    for (let d = r.start; d <= r.end; d += 86400000) {
+      if (!trips.some(t => overlapDays(t.entry, t.exit, d, d) > 0)) days.add(fmt(d));
+    }
+  });
+  const list = [...days].sort();
+  if (list.length === 0) {
+    el.innerHTML = '<div class="hint" style="color:var(--green);">&#10003; Every day with a bill is covered by a trip (all years checked).</div>';
+    return;
+  }
+  // group by month so each month is one click
+  const byMonth = {};
+  list.forEach(d => { (byMonth[d.slice(0, 7)] = byMonth[d.slice(0, 7)] || []).push(+d.slice(8)); });
+  el.innerHTML = '<div class="print-note-box" style="border-color:var(--alert); background:#f5e0ee; color:#631253;">' +
+    '<strong>&#9888; ' + list.length + ' day(s) have a bill but no trip:</strong> ' +
+    Object.entries(byMonth).map(([ym, ds]) => {
+      const label = new Date(ym + '-01T00:00:00Z').toLocaleDateString('en-GB', { month: 'short', year: 'numeric', timeZone: 'UTC' });
+      return '<a href="#" data-goto-month="' + ym + '" style="color:inherit; font-weight:bold;">' + label + '</a> (' + ds.join(', ') + ')';
+    }).join(' &middot; ') +
+    '<div class="hint" style="margin-top:4px;">Click a month to jump there, then click a day and use \u201cWas there, no bill needed\u201d or edit the trip.</div></div>';
+  el.querySelectorAll('[data-goto-month]').forEach(a => {
+    a.onclick = e => {
+      e.preventDefault();
+      const [y, m] = a.dataset.gotoMonth.split('-').map(Number);
+      if (y !== calYear) jumpToYear(y); // keeps the lists and year filter in step with the calendar
+      calMonth = m - 1; renderCalendar();
+      document.getElementById('calGrid').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    };
+  });
+}
 function renderCalendar() {
+  renderUncoveredDaysCheck();
   document.getElementById('calMonthLabel').textContent = new Date(Date.UTC(calYear, calMonth, 1)).toLocaleDateString('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' });
   const grid = document.getElementById('calGrid');
   grid.innerHTML = '';
@@ -2002,6 +2048,27 @@ function chainAwareSortLegs(legsArray) {
   return result;
 }
 
+// A bill whose trip no longer exists (e.g. a flight stretch that was rebuilt differently) is
+// re-attached to the trip covering its first day, when that's unambiguous. For bills that
+// belonged to a flight stretch, the flight's country decides which trip.
+function rehomeOrphanBills() {
+  const ids = new Set(trips.map(t => t.id));
+  let moved = 0;
+  expenses.forEach(ex => {
+    if (!ex.date || (ex.tripId && ids.has(ex.tripId))) return;
+    const day = billRange(ex).start;
+    let cands = trips.filter(t => overlapDays(t.entry, t.exit, day, day) > 0);
+    const m = /^derived-(?:origin-)?([^~]+)/.exec(ex.tripId || '');
+    const leg = m && legs.find(l => l.id === m[1]);
+    if (leg) {
+      const country = ex.tripId.startsWith('derived-origin-') ? leg.from : leg.to;
+      const same = cands.filter(t => t.country === country);
+      if (same.length) cands = same;
+    }
+    if (cands.length === 1) { ex.tripId = cands[0].id; moved++; }
+  });
+  return moved;
+}
 function buildTripsFromLegs() {
   const warnEl = document.getElementById('legWarnings');
   if (legs.length === 0) {
@@ -2066,19 +2133,40 @@ function buildTripsFromLegs() {
   trips = trips.filter(t => !t.derived);
   let manualCountBefore = trips.length;
   let skippedForManualOverride = 0;
+  const DAY = 86400000;
   derived.forEach(d => {
-    // If a manually-owned trip (edited by hand, of any evidence level) already covers this
-    // exact country + date range, trust that correction over blindly re-deriving from the
-    // flight chain again \u2014 otherwise every rebuild would silently recreate the original,
-    // uncorrected stay right alongside the fix, which is exactly the "my edit won't save" bug.
-    const dEntry = parseDate(d.entry), dExit = parseDate(d.exit);
-    const manuallyOwned = trips.some(t => !t.derived && t.country === d.country && overlapDays(t.entry, t.exit, dEntry, dExit) > 0);
-    if (manuallyOwned) { skippedForManualOverride++; return; }
-    trips.push(d);
-    // A real, confirmed flight always outranks a receipt-only guess covering the same day(s) \u2014
-    // this trims or removes any manual/evidence-only trip the new flight now confirms.
-    resolveOverlaps(d, true); // true = only ever supersede evidence-only (receipt-backed) trips here
+    // 1) A hand-kept trip made by editing THIS flight stretch owns it outright: your correction
+    //    wins, whether you made it longer or shorter.
+    let owner = trips.find(t => !t.derived && t.ownsDerived === d.id);
+    if (!owner) { // edited before ownership was recorded: same country, same arrival date
+      owner = trips.find(t => !t.derived && t.fromBoardingPass && !t.ownsDerived && t.country === d.country && t.entry === d.entry);
+      if (owner) owner.ownsDerived = d.id;
+    }
+    if (owner) { skippedForManualOverride++; return; }
+    // 2) Any other hand-kept trip in the same country only claims the days it actually covers.
+    //    This used to throw away the WHOLE flight stretch if a hand-kept trip touched even one
+    //    of its days (e.g. a trip ending on the 24th wiped out a 24th-31st flight stretch),
+    //    leaving the days in between uncovered and their bills magenta.
+    let pieces = [[parseDate(d.entry), parseDate(d.exit)]];
+    trips.filter(t => !t.derived && !t.evidenceOnly && t.country === d.country).forEach(t => {
+      const a = parseDate(t.entry), b = parseDate(t.exit);
+      pieces = pieces.flatMap(([st, en]) => {
+        if (b < st || a > en) return [[st, en]];
+        const out = [];
+        if (a > st) out.push([st, a - DAY]);
+        if (b < en) out.push([b + DAY, en]);
+        return out;
+      });
+    });
+    if (pieces.length === 0) { skippedForManualOverride++; return; }
+    pieces.forEach(([st, en], i) => {
+      const piece = Object.assign({}, d, { id: i === 0 ? d.id : d.id + '~' + i, entry: fmt(st), exit: fmt(en) });
+      trips.push(piece);
+      // A real, confirmed flight always outranks a receipt-only guess covering the same day(s).
+      resolveOverlaps(piece, true);
+    });
   });
+  rehomeOrphanBills();
   const manualCountAfter = trips.filter(t => !t.derived).length;
   const supersededCount = manualCountBefore - manualCountAfter;
   return Promise.all([saveTrips(), saveExpenses()]).then(() => {
@@ -2114,7 +2202,7 @@ function extendTripToCoverBill(ex) {
   if (trip.derived) {
     // Flight-built trips are rebuilt from scratch on every load, so a stretched one has to become
     // a hand-kept trip (keeping its boarding-pass badge) or the change would vanish on reload.
-    saved = { id: uid(), country: trip.country, region: trip.region, state: trip.state || '', entry: fmt(newEntry), exit: fmt(newExit), note: trip.note || '', evidenceOnly: false, fromBoardingPass: true };
+    saved = { id: uid(), country: trip.country, region: trip.region, state: trip.state || '', entry: fmt(newEntry), exit: fmt(newExit), note: trip.note || '', evidenceOnly: false, fromBoardingPass: true, ownsDerived: trip.id.split('~')[0] };
     expenses.forEach(e => { if (e.tripId === trip.id) e.tripId = saved.id; });
     trips[idx] = saved;
   } else {
@@ -2667,6 +2755,8 @@ document.getElementById('entryForm').addEventListener('submit', async (e) => {
         // and it went back" bug). fromBoardingPass keeps the green badge instead, and the rebuild
         // then leaves this stretch alone because a hand-kept trip already covers it.
         if (trips[idx].derived || trips[idx].fromBoardingPass) savedTrip.fromBoardingPass = true;
+        const owned = trips[idx].derived ? trips[idx].id.split('~')[0] : trips[idx].ownsDerived;
+        if (owned) savedTrip.ownsDerived = owned;
         // Bills attached to the old trip id follow the trip to its new id.
         if (newId !== editId) expenses.forEach(ex => { if (ex.tripId === editId) ex.tripId = newId; });
         trips[idx] = savedTrip;
