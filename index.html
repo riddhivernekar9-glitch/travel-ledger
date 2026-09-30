@@ -253,6 +253,7 @@
           <option value="Fuel">Fuel / car rental</option>
           <option value="Airline">Airline</option>
           <option value="Cash withdrawal">Cash withdrawal</option>
+          <option value="Laundry">Laundry / dry cleaning</option>
           <option value="Other">Other</option>
         </select>
       </div>
@@ -3069,6 +3070,23 @@ async function initLedger() {
       } catch (e) {}
     }
     await storageSetRaw('cash-type-v1', new Date().toISOString());
+  }
+  // One-time, same idea: "Other" bills whose vendor/name says dry cleaning, cleaners or laundry.
+  if (!(await storageGetRaw('laundry-type-v1'))) {
+    const toFix = expenses.filter(ex => ex.category === 'Other' && /dry\s*-?\s*clean|cleaners|laundr/i.test(ex.vendor || ''));
+    if (toFix.length > 0) {
+      await pushUndo();
+      const lines = toFix.map(ex => '\u2022 ' + (ex.date || '') + '  ' + ex.vendor);
+      toFix.forEach(ex => { ex.category = 'Laundry'; });
+      await saveExpenses();
+      renderAll();
+      try {
+        alert('One-time update: ' + toFix.length + ' bill(s) typed as Other that mention dry cleaning, cleaners or laundry are now the type "Laundry":\n\n' +
+          lines.slice(0, 30).join('\n') + (lines.length > 30 ? '\n\u2026and ' + (lines.length - 30) + ' more' : '') +
+          '\n\nNothing else about them changed. If any of these is wrong, click Undo once to reverse this update.');
+      } catch (e) {}
+    }
+    await storageSetRaw('laundry-type-v1', new Date().toISOString());
   }
   startLiveSync();
 }
