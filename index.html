@@ -133,6 +133,10 @@
 </div>
 
 <div id="appRoot" style="display:none;">
+<div id="newVersionBanner" style="display:none; position:sticky; top:0; z-index:200; background:#1f2733; color:#fff; padding:10px 14px; text-align:center; font-size:14px;">
+  A newer version of the ledger is live. <button type="button" id="newVersionReload" style="margin-left:8px; font-family:inherit; cursor:pointer; padding:4px 10px;">Reload now</button>
+  <span style="opacity:.8; margin-left:6px;">(your data is safe; it's all saved online)</span>
+</div>
 <div class="wrap">
 
   <div class="masthead">
@@ -2911,6 +2915,7 @@ document.getElementById('expenseForm').addEventListener('submit', async (e) => {
       expenses.push({ id: uid(), tripId, category, vendor, date: date || null, endDate, fromPlace: fromPlace || null, toPlace: toPlace || null, uaeResidence, amount: amountRaw === '' ? null : Number(amountRaw), currency: currency || null });
     }
     const savedBill = editId ? expenses.find(x => x.id === editId) : expenses[expenses.length - 1];
+    autoTypeFromVendor(savedBill);
     const tripStretched = extendTripToCoverBill(savedBill);
     if (tripStretched) await saveTrips();
     await saveExpenses();
@@ -2987,6 +2992,32 @@ async function cleanupLegacyUndoFields() {
       }
     }
   } catch (e) { /* best-effort cleanup; a failure here shouldn't block the app from loading */ }
+}
+
+// ================= stale-tab check =================
+// A tab left open keeps running the old version after an update is uploaded, so new bills can
+// miss newer features (e.g. a type that didn't exist yet). Every few minutes, and whenever the
+// tab comes back into view, compare this page's version with the one that's live.
+const APP_VERSION = '2026-09-30b';
+async function checkForNewerVersion() {
+  try {
+    const res = await fetch(location.href.split('#')[0], { cache: 'no-store' });
+    const m = /const APP_VERSION = '([^']+)'/.exec(await res.text());
+    if (m && m[1] !== APP_VERSION) document.getElementById('newVersionBanner').style.display = 'block';
+  } catch (e) { /* offline or opened from a file: nothing to compare */ }
+}
+document.getElementById('newVersionReload').onclick = () => location.reload();
+setInterval(checkForNewerVersion, 5 * 60 * 1000);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkForNewerVersion(); });
+
+// Bills typed as "Other" whose vendor/name clearly says what they are get the proper type,
+// both when saved and (once) for everything already logged.
+function autoTypeFromVendor(ex) {
+  if (!ex || ex.category !== 'Other') return false;
+  const v = ex.vendor || '';
+  if (/dry\s*-?\s*clean|cleaners|laundr/i.test(v)) { ex.category = 'Laundry'; return true; }
+  if (/cash\s*with?dr[ae]w|withdrawa?l/i.test(v)) { ex.category = 'Cash withdrawal'; return true; }
+  return false;
 }
 
 async function initLedger() {
@@ -3072,7 +3103,7 @@ async function initLedger() {
     await storageSetRaw('cash-type-v1', new Date().toISOString());
   }
   // One-time, same idea: "Other" bills whose vendor/name says dry cleaning, cleaners or laundry.
-  if (!(await storageGetRaw('laundry-type-v1'))) {
+  if (!(await storageGetRaw('laundry-type-v2'))) { // v2: re-run to catch bills added from a tab still on the old version
     const toFix = expenses.filter(ex => ex.category === 'Other' && /dry\s*-?\s*clean|cleaners|laundr/i.test(ex.vendor || ''));
     if (toFix.length > 0) {
       await pushUndo();
@@ -3086,7 +3117,7 @@ async function initLedger() {
           '\n\nNothing else about them changed. If any of these is wrong, click Undo once to reverse this update.');
       } catch (e) {}
     }
-    await storageSetRaw('laundry-type-v1', new Date().toISOString());
+    await storageSetRaw('laundry-type-v2', new Date().toISOString());
   }
   startLiveSync();
 }
