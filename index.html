@@ -251,6 +251,8 @@
           <option value="Medical">Medical / dentist</option>
           <option value="Entertainment">Entertainment / activities</option>
           <option value="Fuel">Fuel / car rental</option>
+          <option value="Airline">Airline</option>
+          <option value="Cash withdrawal">Cash withdrawal</option>
           <option value="Other">Other</option>
         </select>
       </div>
@@ -3048,6 +3050,25 @@ async function initLedger() {
       } catch (e) {}
     }
     await storageSetRaw('checkout-trim-v1', new Date().toISOString());
+  }
+  // One-time: bills logged before "Cash withdrawal" existed as a type, with "cash withdrawal"
+  // written in the vendor/name, are switched to that type so the calendar shows them properly.
+  if (!(await storageGetRaw('cash-type-v1'))) {
+    const isCash = ex => ex.category !== 'Cash withdrawal' && /cash\s*with?dr[ae]w|withdrawa?l/i.test(ex.vendor || '');
+    const toFix = expenses.filter(isCash);
+    if (toFix.length > 0) {
+      await pushUndo();
+      const lines = toFix.map(ex => '\u2022 ' + (ex.date || '') + '  ' + ex.vendor + '  (was ' + ex.category + ')');
+      toFix.forEach(ex => { ex.category = 'Cash withdrawal'; });
+      await saveExpenses();
+      renderAll();
+      try {
+        alert('One-time update: ' + toFix.length + ' bill(s) mentioning a cash withdrawal are now the type "Cash withdrawal":\n\n' +
+          lines.slice(0, 30).join('\n') + (lines.length > 30 ? '\n\u2026and ' + (lines.length - 30) + ' more' : '') +
+          '\n\nNothing else about them changed. If any of these is wrong, click Undo once to reverse this update.');
+      } catch (e) {}
+    }
+    await storageSetRaw('cash-type-v1', new Date().toISOString());
   }
   startLiveSync();
 }
