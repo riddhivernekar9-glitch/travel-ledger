@@ -230,18 +230,22 @@
       </div>
       <div id="expNewTripWrap" style="display:none; flex-basis:100%; gap:10px; flex-wrap:wrap;">
         <div style="flex:1; min-width:160px;">
-          <label>New trip \u2014 country</label>
+          <label>New trip &mdash; country</label>
           <select id="expNewTripCountry"></select>
         </div>
         <div style="flex:1; min-width:130px;">
-          <label>New trip \u2014 entry date</label>
+          <label>New trip &mdash; city</label>
+          <input type="text" id="expNewTripCity" placeholder="e.g. London">
+        </div>
+        <div style="flex:1; min-width:130px;">
+          <label>New trip &mdash; entry date</label>
           <input type="date" id="expNewTripEntry">
         </div>
         <div style="flex:1; min-width:130px;">
-          <label>New trip \u2014 exit date</label>
+          <label>New trip &mdash; exit date</label>
           <input type="date" id="expNewTripExit">
         </div>
-        <p class="hint" style="flex-basis:100%; margin:2px 0 0;">A hotel booking (or any bill) is enough on its own to justify a trip \u2014 this creates it automatically and attaches this bill to it in one step.</p>
+        <p class="hint" style="flex-basis:100%; margin:2px 0 0;">A hotel booking (or any bill) is enough on its own to justify a trip &mdash; this creates it automatically and attaches this bill to it in one step.</p>
       </div>
       <div>
         <label>Type</label>
@@ -478,11 +482,11 @@
     <h2>Your trips</h2>
     <button type="button" id="upgradeAllBtn" class="btn-primary" style="margin-bottom:8px;">Make bill-backed trips proper (one click, does everything)</button>
     <p class="hint" style="margin-bottom:10px;">Carves precise trips out of hotel bookings, then upgrades any trip that already has at least
-      one bill attached (hotel, restaurant, taxi, anything) from receipt-only to fully confirmed \u2014 matching the idea that
+      one bill attached (hotel, restaurant, taxi, anything) from receipt-only to fully confirmed &mdash; matching the idea that
       a hotel booking plus bills is real evidence of being in a country, not just a boarding pass.</p>
     <button type="button" id="backfillHotelBtn" class="btn-secondary" style="margin-bottom:8px;">Just tighten dates using hotel bookings (no upgrading)</button>
     <p class="hint" style="margin-bottom:10px;">For any hotel bill sitting inside a wide receipt-only trip, this carves out a precise trip
-      matching the hotel's own check-in/check-out dates \u2014 one click, does the whole list at once. Only ever touches
+      matching the hotel's own check-in/check-out dates &mdash; one click, does the whole list at once. Only ever touches
       receipt-only trips; never a confirmed flight-backed one.</p>
     <div id="backfillStatus" class="hint" style="margin-bottom:12px;"></div>
     <input type="text" id="tripSearch" placeholder="Filter by country, state, or notes&hellip;" style="width:100%; font-family:'Courier New',monospace; font-size:13px; padding:8px; border:1px solid var(--line-strong); border-radius:2px; background:var(--paper); color:var(--ink); margin-bottom:12px;">
@@ -559,8 +563,8 @@
         <select id="country"></select>
       </div>
       <div>
-        <label>State / region (optional)</label>
-        <input type="text" id="state" placeholder="e.g. California">
+        <label>City / area (optional)</label>
+        <input type="text" id="state" placeholder="e.g. London">
       </div>
       <div>
         <label>Entry date</label>
@@ -1283,13 +1287,17 @@ document.getElementById('dayDetailOverlay').onclick = closeDayDetailPanel;
 // "He was in <country> on these days" — no bill, no flight needed. Joins onto a hand-kept trip in
 // the same country that ends the day before or starts the day after, so marking days one by one
 // grows a single trip instead of leaving a string of one-day trips.
-async function markPresent(country, fromStr, toStr) {
+async function markPresent(country, fromStr, toStr, city) {
   const from = parseDate(fromStr), to = parseDate(toStr);
   if (!country || isNaN(from) || isNaN(to) || to < from) return false;
+  city = (city || '').trim();
   await pushUndo();
   const DAY = 86400000;
-  const before = trips.find(t => !t.derived && t.country === country && parseDate(t.exit) >= from - DAY && parseDate(t.entry) < from);
-  const after = trips.find(t => !t.derived && t.country === country && parseDate(t.entry) <= to + DAY && parseDate(t.exit) > to && t !== before);
+  // Only join onto a neighbouring trip in the same city (or one with no city yet); a different
+  // city next door stays its own trip, so "London" days never get relabelled "Manchester".
+  const sameCity = t => !city || !(t.state || '') || t.state.toLowerCase() === city.toLowerCase();
+  const before = trips.find(t => !t.derived && t.country === country && sameCity(t) && parseDate(t.exit) >= from - DAY && parseDate(t.entry) < from);
+  const after = trips.find(t => !t.derived && t.country === country && sameCity(t) && parseDate(t.entry) <= to + DAY && parseDate(t.exit) > to && t !== before);
   let kept;
   if (before) {
     kept = before;
@@ -1298,9 +1306,10 @@ async function markPresent(country, fromStr, toStr) {
     kept = after;
     if (parseDate(kept.entry) > from) kept.entry = fmt(from);
   } else {
-    kept = { id: uid(), country, region: mapCountryToRegion(country), state: '', entry: fmt(from), exit: fmt(to), note: '', evidenceOnly: false };
+    kept = { id: uid(), country, region: mapCountryToRegion(country), state: city, entry: fmt(from), exit: fmt(to), note: '', evidenceOnly: false };
     trips.push(kept);
   }
+  if (city && !kept.state) kept.state = city;
   if (before && after) { // the new days bridge two trips: join them into one
     kept.exit = after.exit;
     expenses.forEach(ex => { if (ex.tripId === after.id) ex.tripId = kept.id; });
@@ -1343,7 +1352,7 @@ function showDayDetailPanel(dateStr) {
     dayTrips.forEach(t => {
       const badge = (t.derived || t.fromBoardingPass) ? ' <span style="color:var(--green);">&#9992; boarding pass</span>' : '';
       html += '<div style="border:1px solid var(--line); border-radius:4px; padding:8px 10px; margin-bottom:8px;">' +
-        '<strong>' + t.country + '</strong>' + (t.state ? ', ' + t.state : '') + ' (' + t.entry + ' to ' + t.exit + ')' + badge +
+        '<strong>' + t.country + '</strong>' + (tripPlace(t) ? ', ' + tripPlace(t) : '') + ' (' + t.entry + ' to ' + t.exit + ')' + badge +
         '<div style="margin-top:6px;"><button type="button" class="edit-btn" data-panel-edit-trip="' + t.id + '">edit this trip</button>' +
         '<button type="button" class="del-btn" data-panel-del-trip="' + t.id + '" style="margin-left:4px;">remove this trip</button></div></div>';
     });
@@ -1368,6 +1377,7 @@ function showDayDetailPanel(dateStr) {
     '<div style="font-weight:bold; margin-bottom:6px;">Was there, no bill needed</div>' +
     '<div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center; font-size:13px;">' +
     '<select id="dayMarkCountry" style="max-width:220px;">' + WORLD_COUNTRIES.map(c => '<option value="' + c + '"' + (c === defaultCountry ? ' selected' : '') + '>' + c + '</option>').join('') + '</select>' +
+    '<input type="text" id="dayMarkCity" placeholder="City, e.g. London" value="' + (guessCity(defaultCountry, dayMs) || '').replace(/"/g, '&quot;') + '" style="width:150px;">' +
     '<span>from</span><input type="date" id="dayMarkFrom" value="' + dateStr + '" style="width:auto;">' +
     '<span>to</span><input type="date" id="dayMarkTo" value="' + dateStr + '" style="width:auto;">' +
     '<button type="button" class="btn-primary" id="dayMarkBtn">Mark as there</button></div>' +
@@ -1385,14 +1395,18 @@ function showDayDetailPanel(dateStr) {
   panel.style.display = 'block';
 
   document.getElementById('dayDetailClose').onclick = closeDayDetailPanel;
+  document.getElementById('dayMarkCountry').onchange = () => {
+    document.getElementById('dayMarkCity').value = guessCity(document.getElementById('dayMarkCountry').value, dayMs);
+  };
   document.getElementById('dayMarkBtn').onclick = async () => {
     const country = document.getElementById('dayMarkCountry').value;
+    const city = (document.getElementById('dayMarkCity').value || '').trim();
     const from = document.getElementById('dayMarkFrom').value, to = document.getElementById('dayMarkTo').value || from;
     const st = document.getElementById('dayMarkStatus');
     if (!from || parseDate(to) < parseDate(from)) { st.textContent = 'Check the dates: "to" is before "from".'; st.style.color = 'var(--red)'; return; }
     if ((parseDate(to) - parseDate(from)) / 86400000 > 60) { st.textContent = 'That is more than 60 days. Use the trip form under Advanced for long stays.'; st.style.color = 'var(--red)'; return; }
     document.getElementById('dayMarkBtn').disabled = true;
-    await markPresent(country, from, to);
+    await markPresent(country, from, to, city);
     showDayDetailPanel(dateStr); // reopen with the updated trip showing
   };
 
@@ -1625,7 +1639,7 @@ function renderCalendar() {
         const colors = REGION_COLORS[t.region] || REGION_COLORS.Other;
         const ownTags = expenses.filter(ex => ex.tripId === t.id && billCoversDay(ex, dayMs)).map(ex => ex.category === 'Train' && ex.fromPlace && ex.toPlace ? 'Train: ' + ex.fromPlace + ' \u2192 ' + ex.toPlace : ex.category);
         const uniqueOwnTags = [...new Set(ownTags)];
-        const place = t.state || t.note || '';
+        const place = tripPlace(t);
         return '<div style="background:' + colors.bg + '; border-left:3px solid ' + colors.border + '; padding:1px 3px; margin-top:1px; font-size:10px; line-height:1.15; color:' + colors.text + ';">' +
           (t.country || t.region) + (place ? ' (' + place + ')' : '') + (uniqueOwnTags.length > 0 ? ' ' + uniqueOwnTags.map(tg => '<b>' + tg + '</b>').join(', ') : '') + '</div>';
       }).join('');
@@ -1654,7 +1668,7 @@ function renderCalendar() {
       // is always blank there. Show whichever one actually has something, state taking priority.
       // A manual day-label (the pencil icon) overrides both \u2014 useful for a single day within
       // a longer trip where a receipt reveals he was actually somewhere more specific that day.
-      const placeText = dayNoteOverride || trip.state || trip.note || '';
+      const placeText = dayNoteOverride || tripPlace(trip);
       const stateText = placeText ? ' (' + placeText + ')' : '';
       cell.title = (trip.country || trip.region) + (placeText ? ', ' + placeText : '') +
         (route ? ' (' + route + ')' : '') + tagText;
@@ -1742,8 +1756,19 @@ function renderCalendar() {
 }
 
 // ================= trips =================
+// Where he usually is when a trip has no city typed in: every UK stay is London, every UAE stay
+// is Dubai. Shown wherever a trip's city is displayed; a city typed on the trip always wins.
+const DEFAULT_CITY = { 'United Kingdom': 'London', 'United Arab Emirates': 'Dubai' };
+function tripPlace(t) { return (t && (t.state || t.note || DEFAULT_CITY[t.country])) || ''; }
+// Best guess for a new trip's city: the nearest trip in the same country that has one, else the default.
+function guessCity(country, dayMs) {
+  const near = trips.filter(t => t.country === country && (t.state || t.note))
+    .sort((a, b) => Math.min(Math.abs(parseDate(a.entry) - dayMs), Math.abs(parseDate(a.exit) - dayMs)) - Math.min(Math.abs(parseDate(b.entry) - dayMs), Math.abs(parseDate(b.exit) - dayMs)))[0];
+  return near ? (near.state || near.note) : (DEFAULT_CITY[country] || '');
+}
 function tripLabel(t) {
-  return (t.country || t.region) + (t.state ? ', ' + t.state : '') + (t.note ? ' \u2013 ' + t.note : '') + '  (' + t.entry + ' to ' + t.exit + ')';
+  const city = t.state || (!t.note && DEFAULT_CITY[t.country]) || '';
+  return (t.country || t.region) + (city ? ', ' + city : '') + (t.note ? ' \u2013 ' + t.note : '') + '  (' + t.entry + ' to ' + t.exit + ')';
 }
 let cachedGapsUncovered = [];
 let cachedGapsCovered = [];
@@ -2351,6 +2376,7 @@ document.getElementById('expCategory').addEventListener('change', updateCategory
 function updateNewTripFieldVisibility() {
   const isNew = document.getElementById('expTrip').value === '__new__';
   document.getElementById('expNewTripWrap').style.display = isNew ? 'flex' : 'none';
+  if (isNew && !document.getElementById('expNewTripCity').value) document.getElementById('expNewTripCountry').dispatchEvent(new Event('change'));
   updateUaeResidenceVisibility();
 }
 document.getElementById('expTrip').addEventListener('change', updateNewTripFieldVisibility);
@@ -2388,6 +2414,14 @@ function autofillNewTripDatesFromBill() {
   }
 }
 document.getElementById('expDate').addEventListener('change', autofillNewTripDatesFromBill);
+document.getElementById('expNewTripCountry').addEventListener('change', () => {
+  const cityEl = document.getElementById('expNewTripCity');
+  if (!cityEl.value || cityEl.dataset.autofilled === cityEl.value) {
+    const d = document.getElementById('expDate').value;
+    cityEl.value = guessCity(document.getElementById('expNewTripCountry').value, d ? parseDate(d) : Date.now());
+    cityEl.dataset.autofilled = cityEl.value;
+  }
+});
 document.getElementById('expEndDate').addEventListener('change', autofillNewTripDatesFromBill);
 
 function resetExpenseForm() {
@@ -2401,6 +2435,7 @@ function resetExpenseForm() {
   document.getElementById('expUaeResidence').checked = false;
   document.getElementById('expNewTripEntry').value = '';
   document.getElementById('expNewTripExit').value = '';
+  document.getElementById('expNewTripCity').value = '';
   updateCategoryFieldVisibility();
 }
 document.getElementById('expCancelBtn').addEventListener('click', resetExpenseForm);
@@ -2880,7 +2915,8 @@ document.getElementById('expenseForm').addEventListener('submit', async (e) => {
       // Note left blank on purpose: the ⚠ receipt-only badge already signals "not boarding-pass-confirmed" —
       // a generic "Created from a bill" label added nothing and, once a trip's dates get extended
       // (e.g. from later bills or a matching flight), it repeats on every day the trip covers.
-      const newTrip = { id: uid(), country: ntCountry, region: mapCountryToRegion(ntCountry), state: '', entry: ntEntry, exit: ntExit, note: '', evidenceOnly: true };
+      const ntCity = (document.getElementById('expNewTripCity').value || '').trim();
+      const newTrip = { id: uid(), country: ntCountry, region: mapCountryToRegion(ntCountry), state: ntCity, entry: ntEntry, exit: ntExit, note: '', evidenceOnly: true };
       trips.push(newTrip);
       newTripSupersededCount = resolveOverlaps(newTrip, true); // receipt-only, so it can only ever affect other receipt-only trips
       await saveTrips();
@@ -2998,7 +3034,7 @@ async function cleanupLegacyUndoFields() {
 // A tab left open keeps running the old version after an update is uploaded, so new bills can
 // miss newer features (e.g. a type that didn't exist yet). Every few minutes, and whenever the
 // tab comes back into view, compare this page's version with the one that's live.
-const APP_VERSION = '2026-09-30b';
+const APP_VERSION = '2026-09-30c';
 async function checkForNewerVersion() {
   try {
     const res = await fetch(location.href.split('#')[0], { cache: 'no-store' });
