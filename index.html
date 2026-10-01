@@ -1287,6 +1287,61 @@ document.getElementById('dayDetailOverlay').onclick = closeDayDetailPanel;
 // "He was in <country> on these days" — no bill, no flight needed. Joins onto a hand-kept trip in
 // the same country that ends the day before or starts the day after, so marking days one by one
 // grows a single trip instead of leaving a string of one-day trips.
+// Name the city for a run of days without touching the trip itself (country and day counts stay
+// exactly the same). Stored as per-day labels, the same thing the pencil sets.
+async function setCityForDays(fromStr, toStr, city) {
+  const from = parseDate(fromStr), to = parseDate(toStr);
+  if (isNaN(from) || isNaN(to) || to < from) return 0;
+  city = (city || '').trim();
+  await pushUndo();
+  let n = 0;
+  for (let d = from; d <= to; d += 86400000) {
+    const ds = fmt(d);
+    const trip = trips.find(t => overlapDays(t.entry, t.exit, d, d) > 0);
+    if (!city || (trip && tripPlace(trip).toLowerCase() === city.toLowerCase())) delete dayNotes[ds];
+    else dayNotes[ds] = city;
+    n++;
+  }
+  await saveDayNotes();
+  renderCalendar();
+  return n;
+}
+
+// "Not there / don't know where": take these days out of every trip that covers them, splitting
+// a trip in two when the days are in the middle. Flight-built stretches are first turned into
+// hand-kept trips (keeping the boarding-pass badge) so the change survives the next reload.
+async function removeDaysFromTrips(fromStr, toStr) {
+  const DAY = 86400000;
+  const from = parseDate(fromStr), to = parseDate(toStr);
+  if (isNaN(from) || isNaN(to) || to < from) return 0;
+  await pushUndo();
+  let touched = 0;
+  trips.filter(t => overlapDays(t.entry, t.exit, from, to) > 0).forEach(orig => {
+    touched++;
+    let t = orig;
+    if (t.derived) {
+      t = { id: uid(), country: orig.country, region: orig.region, state: orig.state || '', entry: orig.entry, exit: orig.exit, note: orig.note || '', evidenceOnly: false, fromBoardingPass: true, ownsDerived: orig.id.split('~')[0] };
+      expenses.forEach(ex => { if (ex.tripId === orig.id) ex.tripId = t.id; });
+      trips[trips.indexOf(orig)] = t;
+    }
+    const e = parseDate(t.entry), x = parseDate(t.exit);
+    const left = e < from ? [e, from - DAY] : null;
+    const right = x > to ? [to + DAY, x] : null;
+    if (!left && !right) { trips = trips.filter(o => o !== t); return; }
+    if (left) { t.entry = fmt(left[0]); t.exit = fmt(left[1]); }
+    if (right) {
+      if (left) {
+        const piece = Object.assign({}, t, { id: uid(), entry: fmt(right[0]), exit: fmt(right[1]) });
+        trips.push(piece);
+        // bills from the later part of the trip go with the later piece
+        expenses.forEach(ex => { if (ex.tripId === t.id && ex.date && billRange(ex).start > to) ex.tripId = piece.id; });
+      } else { t.entry = fmt(right[0]); t.exit = fmt(right[1]); }
+    }
+  });
+  await saveTrips(); await saveExpenses();
+  renderAll(); populateCloseYearSelect();
+  return touched;
+}
 async function markPresent(country, fromStr, toStr, city) {
   const from = parseDate(fromStr), to = parseDate(toStr);
   if (!country || isNaN(from) || isNaN(to) || to < from) return false;
@@ -1373,15 +1428,26 @@ function showDayDetailPanel(dateStr) {
   const nearest = trips.filter(t => !dayTrips.includes(t)).map(t => ({ t, gap: Math.min(Math.abs(parseDate(t.entry) - dayMs), Math.abs(parseDate(t.exit) - dayMs)) }))
     .sort((a, b) => a.gap - b.gap)[0];
   const defaultCountry = dayTrips[0] ? dayTrips[0].country : nearest ? nearest.t.country : 'United Arab Emirates';
+  const curCity = dayNotes[dateStr] || (dayTrips[0] ? tripPlace(dayTrips[0]) : '');
+  const row = 'display:flex; gap:6px; flex-wrap:wrap; align-items:center; font-size:13px; margin-top:8px;';
+  const q = v => (v || '').replace(/"/g, '&quot;');
   html += '<div style="margin-top:14px; padding:10px; border:1px solid var(--line); border-radius:4px; background:var(--paper-card);">' +
-    '<div style="font-weight:bold; margin-bottom:6px;">Was there, no bill needed</div>' +
-    '<div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center; font-size:13px;">' +
-    '<select id="dayMarkCountry" style="max-width:220px;">' + WORLD_COUNTRIES.map(c => '<option value="' + c + '"' + (c === defaultCountry ? ' selected' : '') + '>' + c + '</option>').join('') + '</select>' +
-    '<input type="text" id="dayMarkCity" placeholder="City, e.g. London" value="' + (guessCity(defaultCountry, dayMs) || '').replace(/"/g, '&quot;') + '" style="width:150px;">' +
-    '<span>from</span><input type="date" id="dayMarkFrom" value="' + dateStr + '" style="width:auto;">' +
-    '<span>to</span><input type="date" id="dayMarkTo" value="' + dateStr + '" style="width:auto;">' +
+    '<div style="font-weight:bold;">Change these days</div>' +
+    '<div style="' + row + '"><span>from</span><input type="date" id="dayMarkFrom" value="' + dateStr + '" style="width:auto;">' +
+    '<span>to</span><input type="date" id="dayMarkTo" value="' + dateStr + '" style="width:auto;"></div>' +
+    (dayTrips.length > 0 ?
+      '<div style="' + row + '"><span style="min-width:120px;">City on these days</span>' +
+      '<input type="text" id="dayCityInput" value="' + q(curCity) + '" placeholder="e.g. Selva" style="width:150px;">' +
+      '<button type="button" class="btn-primary" id="dayCityBtn">Set city</button></div>' +
+      '<div style="' + row + '"><span style="min-width:120px;">Not there / unknown</span>' +
+      '<button type="button" class="btn-secondary" id="dayRemoveBtn">Take these days out of the trip</button></div>'
+      : '') +
+    '<div style="' + row + '"><span style="min-width:120px;">Was there (no bill)</span>' +
+    '<select id="dayMarkCountry" style="max-width:200px;">' + WORLD_COUNTRIES.map(c => '<option value="' + c + '"' + (c === defaultCountry ? ' selected' : '') + '>' + c + '</option>').join('') + '</select>' +
+    '<input type="text" id="dayMarkCity" placeholder="City, e.g. London" value="' + q(guessCity(defaultCountry, dayMs)) + '" style="width:130px;">' +
     '<button type="button" class="btn-primary" id="dayMarkBtn">Mark as there</button></div>' +
-    '<div class="hint" id="dayMarkStatus" style="margin-top:4px;">Joins onto a trip in the same country right before or after, if there is one.</div></div>';
+    '<div class="hint" id="dayMarkStatus" style="margin-top:6px;">Set city only changes the name shown, the day still counts for the same country. ' +
+    'For a different country: take the days out first, then mark them as there.</div></div>';
 
   html += '<div style="margin-top:14px; display:flex; gap:8px; flex-wrap:wrap;">' +
     '<button type="button" class="btn-primary" id="dayDetailAddBill">+ add a bill for this day</button>' +
@@ -1395,16 +1461,39 @@ function showDayDetailPanel(dateStr) {
   panel.style.display = 'block';
 
   document.getElementById('dayDetailClose').onclick = closeDayDetailPanel;
+  const rangeOk = () => {
+    const from = document.getElementById('dayMarkFrom').value, to = document.getElementById('dayMarkTo').value || from;
+    const st = document.getElementById('dayMarkStatus');
+    if (!from || parseDate(to) < parseDate(from)) { st.textContent = 'Check the dates: "to" is before "from".'; st.style.color = 'var(--red)'; return null; }
+    if ((parseDate(to) - parseDate(from)) / 86400000 > 60) { st.textContent = 'That is more than 60 days. Use the trip form under Advanced for long stays.'; st.style.color = 'var(--red)'; return null; }
+    return [from, to];
+  };
+  if (document.getElementById('dayCityBtn')) {
+    document.getElementById('dayCityBtn').onclick = async () => {
+      const r = rangeOk(); if (!r) return;
+      await setCityForDays(r[0], r[1], document.getElementById('dayCityInput').value);
+      showDayDetailPanel(dateStr);
+    };
+    document.getElementById('dayRemoveBtn').onclick = async () => {
+      const r = rangeOk(); if (!r) return;
+      const f = parseDate(r[0]), t = parseDate(r[1]);
+      const bills = expenses.filter(ex => ex.date && billRange(ex).start <= t && billRange(ex).end >= f);
+      const ok = confirm('Take ' + r[0] + (r[1] !== r[0] ? ' to ' + r[1] : '') + ' out of the trip?\n\nThose days will count for no country.' +
+        (bills.length ? '\n\n\u26a0 ' + bills.length + ' bill(s) fall on these days, so they will show as magenta (a bill with no trip):\n' + bills.slice(0, 8).map(b => '\u2022 ' + b.date + ' ' + b.category + (b.vendor ? ' \u2014 ' + b.vendor : '')).join('\n') : '') +
+        '\n\nUndo reverses this.');
+      if (!ok) return;
+      await removeDaysFromTrips(r[0], r[1]);
+      showDayDetailPanel(dateStr);
+    };
+  }
   document.getElementById('dayMarkCountry').onchange = () => {
     document.getElementById('dayMarkCity').value = guessCity(document.getElementById('dayMarkCountry').value, dayMs);
   };
   document.getElementById('dayMarkBtn').onclick = async () => {
     const country = document.getElementById('dayMarkCountry').value;
     const city = (document.getElementById('dayMarkCity').value || '').trim();
-    const from = document.getElementById('dayMarkFrom').value, to = document.getElementById('dayMarkTo').value || from;
-    const st = document.getElementById('dayMarkStatus');
-    if (!from || parseDate(to) < parseDate(from)) { st.textContent = 'Check the dates: "to" is before "from".'; st.style.color = 'var(--red)'; return; }
-    if ((parseDate(to) - parseDate(from)) / 86400000 > 60) { st.textContent = 'That is more than 60 days. Use the trip form under Advanced for long stays.'; st.style.color = 'var(--red)'; return; }
+    const r = rangeOk(); if (!r) return;
+    const [from, to] = r;
     document.getElementById('dayMarkBtn').disabled = true;
     await markPresent(country, from, to, city);
     showDayDetailPanel(dateStr); // reopen with the updated trip showing
@@ -3034,7 +3123,7 @@ async function cleanupLegacyUndoFields() {
 // A tab left open keeps running the old version after an update is uploaded, so new bills can
 // miss newer features (e.g. a type that didn't exist yet). Every few minutes, and whenever the
 // tab comes back into view, compare this page's version with the one that's live.
-const APP_VERSION = '2026-09-30c';
+const APP_VERSION = '2026-10-01a';
 async function checkForNewerVersion() {
   try {
     const res = await fetch(location.href.split('#')[0], { cache: 'no-store' });
