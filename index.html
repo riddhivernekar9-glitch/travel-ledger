@@ -704,6 +704,17 @@ function uid() { return Date.now().toString(36) + Math.random().toString(36).sli
 function parseDate(s) { if (!s || typeof s !== 'string') return 0; const [y, m, d] = s.split('-').map(Number); return Date.UTC(y, m - 1, d); }
 function fmt(ms) { return new Date(ms).toISOString().slice(0, 10); }
 function daysInclusive(a, b) { return Math.round((parseDate(b) - parseDate(a)) / 86400000) + 1; }
+// Number of DISTINCT days, within a window, covered by any trip that matches. Two trips in the same
+// country covering the same day count that day once. (Adding up each trip separately counted an
+// overlapping day twice, inflating the totals whenever two trips overlapped.)
+function distinctDays(match, rangeStartMs, rangeEndMs) {
+  const days = new Set();
+  trips.filter(match).forEach(t => {
+    const s = Math.max(parseDate(t.entry), rangeStartMs), e = Math.min(parseDate(t.exit), rangeEndMs);
+    for (let d = s; d <= e; d += 86400000) days.add(d);
+  });
+  return days.size;
+}
 function overlapDays(entryStr, exitStr, rangeStartMs, rangeEndMs) {
   const s = parseDate(entryStr), e = parseDate(exitStr);
   const os = Math.max(s, rangeStartMs), oe = Math.min(e, rangeEndMs);
@@ -1069,7 +1080,7 @@ function computeStats(asof) {
 
   const schStart = asof - 179 * 86400000;
   let schDays = 0;
-  trips.filter(t => t.region === 'Schengen').forEach(t => { schDays += overlapDays(t.entry, t.exit, schStart, asof); });
+  schDays = distinctDays(t => t.region === 'Schengen', schStart, asof);
   stats.push({ title: 'Schengen area', ruleLabel: '90 days in any rolling 180', used: schDays, threshold: 90,
     statusClass: schDays >= 90 ? 'over' : schDays >= 75 ? 'warn' : 'ok', direction: 'atMost',
     note: 'window: ' + fmt(schStart) + ' to ' + fmt(asof),
@@ -1077,7 +1088,7 @@ function computeStats(asof) {
 
   const ukTY = ukTaxYearRange(asof);
   let ukDays = 0;
-  trips.filter(t => t.region === 'UK').forEach(t => { ukDays += overlapDays(t.entry, t.exit, ukTY.start, ukTY.end); });
+  ukDays = distinctDays(t => t.region === 'UK', ukTY.start, ukTY.end);
   stats.push({ title: 'United Kingdom', ruleLabel: 'UK tax year ' + ukTY.label + ', ' + ukThresh + '-day test',
     used: ukDays, threshold: ukThresh, direction: 'atMost',
     statusClass: ukDays >= ukThresh ? 'over' : ukDays >= ukThresh * 0.75 ? 'warn' : 'ok', note: '',
@@ -1088,7 +1099,7 @@ function computeStats(asof) {
   const yearDays = (yr) => {
     const ys = Date.UTC(yr, 0, 1), ye = Date.UTC(yr, 11, 31);
     let d = 0;
-    trips.filter(t => t.region === 'US').forEach(t => { d += overlapDays(t.entry, t.exit, ys, Math.min(ye, asof)); });
+    d = distinctDays(t => t.region === 'US', ys, Math.min(ye, asof));
     return d;
   };
   const curD = yearDays(curYear), prevD = yearDays(curYear - 1), prev2D = yearDays(curYear - 2);
@@ -1100,7 +1111,7 @@ function computeStats(asof) {
 
   const uaeStart = asof - 364 * 86400000;
   let uaeDays = 0;
-  trips.filter(t => t.region === 'UAE').forEach(t => { uaeDays += overlapDays(t.entry, t.exit, uaeStart, asof); });
+  uaeDays = distinctDays(t => t.region === 'UAE', uaeStart, asof);
   const uaeStatus = uaeDays >= uaeThresh ? 'ok' : uaeDays >= uaeThresh - 30 ? 'warn' : 'over';
   stats.push({ title: 'UAE', ruleLabel: uaeThresh + '-day route in rolling 12 months', used: uaeDays, threshold: uaeThresh,
     statusClass: uaeStatus, direction: 'atLeast',
@@ -1110,7 +1121,7 @@ function computeStats(asof) {
   const italyYearStart = Date.UTC(new Date(asof).getUTCFullYear(), 0, 1);
   const italyYearEnd = Date.UTC(new Date(asof).getUTCFullYear(), 11, 31);
   let italyDays = 0;
-  trips.filter(t => t.country === 'Italy').forEach(t => { italyDays += overlapDays(t.entry, t.exit, italyYearStart, Math.min(italyYearEnd, asof)); });
+  italyDays = distinctDays(t => t.country === 'Italy', italyYearStart, Math.min(italyYearEnd, asof));
   stats.push({ title: 'Italy', ruleLabel: '183 days per calendar year (Italy\u2019s own residency test)', used: italyDays, threshold: 183,
     direction: 'atMost', statusClass: italyDays >= 183 ? 'over' : italyDays >= 150 ? 'warn' : 'ok',
     note: 'Separate from the Schengen 90/180 pool above \u2014 this is Italy\u2019s own domestic threshold, based on time in Italy specifically.',
@@ -1119,7 +1130,7 @@ function computeStats(asof) {
   const cyYearStart = Date.UTC(new Date(asof).getUTCFullYear(), 0, 1);
   const cyYearEnd = Date.UTC(new Date(asof).getUTCFullYear(), 11, 31);
   let cyprusDays = 0;
-  trips.filter(t => t.region === 'Cyprus').forEach(t => { cyprusDays += overlapDays(t.entry, t.exit, cyYearStart, Math.min(cyYearEnd, asof)); });
+  cyprusDays = distinctDays(t => t.region === 'Cyprus', cyYearStart, Math.min(cyYearEnd, asof));
   stats.push({ title: 'Cyprus', ruleLabel: '183 days per calendar year (Cyprus\u2019s own residency test)', used: cyprusDays, threshold: 183,
     direction: 'atMost', statusClass: cyprusDays >= 183 ? 'over' : cyprusDays >= 150 ? 'warn' : 'ok',
     note: 'Cyprus is outside Schengen and outside the UAE/UK/US tests \u2014 this is its own separate domestic threshold. Note: Cyprus also offers a 60-day route for people who aren\u2019t tax-resident anywhere else and have ties there (business/property) \u2014 not modeled here, worth checking separately if relevant.',
@@ -1724,9 +1735,17 @@ function renderCalendar() {
       // A genuine multi-country day \u2014 e.g. breakfast in Miami, a hotel booked in Dubai that
       // night. Both are real and both legitimately count toward their own country's threshold,
       // so show each one on its own line rather than picking just one to display.
-      const lines = allTripsToday.map(t => {
+      // One line per country+city, even if several trips overlap there (otherwise overlapping
+      // trips showed the same "Dubai / Rome" lines over and over in one day).
+      const groupsHere = [];
+      allTripsToday.forEach(t => {
+        const key = (t.country || t.region) + '|' + tripPlace(t).toLowerCase();
+        const g = groupsHere.find(x => x.key === key);
+        if (g) g.ids.push(t.id); else groupsHere.push({ key, t, ids: [t.id] });
+      });
+      const lines = groupsHere.map(({ t, ids }) => {
         const colors = REGION_COLORS[t.region] || REGION_COLORS.Other;
-        const ownTags = expenses.filter(ex => ex.tripId === t.id && billCoversDay(ex, dayMs)).map(ex => ex.category === 'Train' && ex.fromPlace && ex.toPlace ? 'Train: ' + ex.fromPlace + ' \u2192 ' + ex.toPlace : ex.category);
+        const ownTags = expenses.filter(ex => ids.includes(ex.tripId) && billCoversDay(ex, dayMs)).map(ex => ex.category === 'Train' && ex.fromPlace && ex.toPlace ? 'Train: ' + ex.fromPlace + ' \u2192 ' + ex.toPlace : ex.category);
         const uniqueOwnTags = [...new Set(ownTags)];
         const place = tripPlace(t);
         return '<div style="background:' + colors.bg + '; border-left:3px solid ' + colors.border + '; padding:1px 3px; margin-top:1px; font-size:10px; line-height:1.15; color:' + colors.text + ';">' +
@@ -2639,11 +2658,11 @@ function renderDuplicateWarnings() {
     btn.onclick = async () => {
       await pushUndo();
       const id = btn.dataset.dupId;
+      // Keep the bills: they move to the copy that stays, instead of being deleted with the duplicate.
+      const keep = dups.find(g => g.some(t => t.id === id))[0];
       trips = trips.filter(t => t.id !== id);
-      const hadExpenses = expenses.some(ex => ex.tripId === id);
-      expenses = expenses.filter(ex => ex.tripId !== id);
-      await saveTrips();
-      if (hadExpenses) await saveExpenses();
+      expenses.forEach(ex => { if (ex.tripId === id) ex.tripId = keep.id; });
+      await saveTrips(); await saveExpenses();
       renderAll();
     };
   });
@@ -3123,7 +3142,7 @@ async function cleanupLegacyUndoFields() {
 // A tab left open keeps running the old version after an update is uploaded, so new bills can
 // miss newer features (e.g. a type that didn't exist yet). Every few minutes, and whenever the
 // tab comes back into view, compare this page's version with the one that's live.
-const APP_VERSION = '2026-10-01a';
+const APP_VERSION = '2026-10-02a';
 async function checkForNewerVersion() {
   try {
     const res = await fetch(location.href.split('#')[0], { cache: 'no-store' });
