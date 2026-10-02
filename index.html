@@ -43,6 +43,8 @@
   #freshFileBanner { display: none; border-color: var(--red); }
 
   .board { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+  .hc-item { margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(99,18,83,0.2); font-size: 13px; }
+  .hc-btn { margin: 6px 6px 0 0; font-size: 12px; padding: 4px 10px; }
   .stub { background: var(--paper-card); border: 1px solid var(--line-strong); border-radius: 3px; padding: 14px 16px; position: relative; overflow: hidden; }
   .stub::before { content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 4px; background: var(--stub-color, var(--ink-soft)); }
   .stub h3 { margin: 0 0 2px; font-size: 14px; font-weight: normal; }
@@ -889,6 +891,7 @@ async function loadAll() {
   } catch (e) { legs = []; }
   try { const v = await storageGetRaw('expenses-list'); expenses = v ? JSON.parse(v) : []; } catch (e) { expenses = []; }
   try { const v = await storageGetRaw('day-notes'); dayNotes = v ? JSON.parse(v) : {}; } catch (e) { dayNotes = {}; }
+  try { const v = await storageGetRaw('reviewed-checks'); reviewedChecks = v ? JSON.parse(v) : []; } catch (e) { reviewedChecks = []; }
   try { const t = await storageGetRaw('uk-threshold'); if (t) ukThresh = Number(t); } catch (e) {}
   try { const t = await storageGetRaw('uae-threshold'); if (t) uaeThresh = Number(t); } catch (e) {}
   try { const v = await storageGetRaw('undo-stack'); undoStack = v ? JSON.parse(v) : []; } catch (e) { undoStack = []; }
@@ -1027,7 +1030,7 @@ async function saveUkThresh(v) { ukThresh = Number(v); await storageSetRaw('uk-t
 async function saveUaeThresh(v) { uaeThresh = Number(v); await storageSetRaw('uae-threshold', String(uaeThresh)); }
 
 function exportBackup() {
-  const payload = { exportedAt: new Date().toISOString(), trips, legs, expenses, ukThresh, uaeThresh };
+  const payload = { exportedAt: new Date().toISOString(), trips, legs, expenses, ukThresh, uaeThresh, dayNotes }; // dayNotes = per-day city labels; were missing from backups
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -1057,6 +1060,7 @@ async function importBackupFile(file) {
   expenses = newExpenses;
   ukThresh = data.ukThresh || 16;
   uaeThresh = data.uaeThresh || 90;
+  if (data.dayNotes && typeof data.dayNotes === 'object') { dayNotes = data.dayNotes; await saveDayNotes(); } // older backups have none: keep current labels
   await saveTrips(); await saveLegs(); await saveExpenses();
   await saveUkThresh(ukThresh); await saveUaeThresh(uaeThresh);
   renderAll(); populateCloseYearSelect();
@@ -1666,44 +1670,202 @@ function jumpToDate(dateStr) {
   });
 }
 
-// Health check over ALL years: every day that has a bill but no trip. Shown above the calendar
-// so a problem anywhere is visible at once, without paging through months to find magenta days.
+// ================= health check (all years) =================
+// Looks for the kinds of mistakes found in the real data, so they don't have to be spotted by eye:
+//  1. days in two countries with no flight that day (e.g. a typed-in Dubai trip overlapping a
+//     flight-confirmed Italy stay) - with a one-click fix that follows the flight
+//  2. the same flight logged twice
+//  3. a flight whose country doesn't match its city (e.g. "from UAE" for a Rome departure)
+//  4. bills on days with no trip
+//  5. days with no country at all (information only)
+// Anything confirmed as correct ("travel day, both right") is remembered and not shown again.
+let reviewedChecks = [];
+async function saveReviewedChecks() { await storageSetRaw('reviewed-checks', JSON.stringify(reviewedChecks)); }
+const isFlightBacked = t => !!(t.derived || t.fromBoardingPass);
+const tripPlaceLabel = t => t.country + (tripPlace(t) ? ' (' + tripPlace(t) + ')' : '');
+
+function findHealthIssues() {
+  const issues = { conflicts: [], dupLegs: [], badLegs: [], billDays: [], blankDays: 0, blankRuns: [] };
+  const DAY = 86400000;
+  // presence per day
+  const byDay = new Map();
+  trips.forEach(t => { for (let d = parseDate(t.entry); d <= parseDate(t.exit); d += DAY) { if (!byDay.has(d)) byDay.set(d, []); byDay.get(d).push(t); } });
+  // countries touched by a flight on each day
+  const flightC = new Map();
+  const addF = (ds, cs) => { const d = parseDate(ds); if (!flightC.has(d)) flightC.set(d, new Set()); cs.forEach(c => flightC.get(d).add(c)); };
+  legs.forEach(l => { addF(l.depDate, [l.from, l.to]); addF(l.arrDate, [l.from, l.to]); });
+
+  // 1. two-country days not explained by a flight
+  const raw = [];
+  [...byDay.keys()].sort((a, b) => a - b).forEach(d => {
+    const ts = byDay.get(d);
+    const cs = [...new Set(ts.map(t => t.country))];
+    if (cs.length < 2) return;
+    const f = flightC.get(d) || new Set();
+    if (cs.every(c => f.has(c))) return; // a real travel day
+    const key = cs.slice().sort().join('+');
+    raw.push({ d, key, ts });
+  });
+  raw.forEach(r => {
+    const last = issues.conflicts[issues.conflicts.length - 1];
+    if (last && last.key === r.key && r.d - last.to === DAY) { last.to = r.d; r.ts.forEach(t => last.trips.add(t)); }
+    else issues.conflicts.push({ key: r.key, from: r.d, to: r.d, trips: new Set(r.ts) });
+  });
+  issues.conflicts = issues.conflicts.filter(c => !reviewedChecks.includes('conflict:' + c.key + ':' + fmt(c.from) + ':' + fmt(c.to)));
+  issues.conflicts.forEach(c => {
+    const ts = [...c.trips];
+    const backed = ts.filter(isFlightBacked), typed = ts.filter(t => !isFlightBacked(t));
+    const backedCountries = new Set(backed.map(t => t.country));
+    // fixable: the flights put him in one country, and a typed-in trip claims another
+    c.fixTrips = typed.filter(t => backedCountries.size === 1 && !backedCountries.has(t.country));
+    c.flightCountry = backedCountries.size === 1 ? [...backedCountries][0] : null;
+  });
+
+  // 2. same flight logged twice
+  const seen = {};
+  legs.forEach(l => { const k = [l.depDate, l.from, l.to, l.arrDate, (l.depCity || '').trim().toLowerCase(), (l.arrCity || '').trim().toLowerCase()].join('|'); (seen[k] = seen[k] || []).push(l); });
+  Object.values(seen).forEach(g => { if (g.length > 1) issues.dupLegs.push(g); });
+
+  // 3. flight country vs city: learn each city's usual country from all flights, flag the odd one out
+  const cityVotes = {};
+  const vote = (city, c) => { const k = (city || '').trim().toLowerCase(); if (!k) return; (cityVotes[k] = cityVotes[k] || {})[c] = (cityVotes[k][c] || 0) + 1; };
+  legs.forEach(l => { vote(l.depCity, l.from); vote(l.arrCity, l.to); });
+  const usual = k => { const v = cityVotes[k]; if (!v) return null; const e = Object.entries(v).sort((a, b) => b[1] - a[1]); return e[0][1] >= 2 && (e.length === 1 || e[0][1] > e[1][1]) ? e[0][0] : null; };
+  legs.forEach(l => {
+    [['from', l.depCity], ['to', l.arrCity]].forEach(([side, city]) => {
+      const u = usual((city || '').trim().toLowerCase());
+      if (u && u !== l[side] && !reviewedChecks.includes('leg:' + l.id + ':' + side)) issues.badLegs.push({ leg: l, side, city: (city || '').trim(), should: u });
+    });
+  });
+
+  // 4. bill days with no trip
+  const billDays = new Set();
+  expenses.forEach(ex => { if (!ex.date) return; const r = billRange(ex); for (let d = r.start; d <= r.end; d += DAY) if (!byDay.has(d)) billDays.add(fmt(d)); });
+  issues.billDays = [...billDays].sort();
+
+  // 5. blank stretches, from the first trip to today
+  const allDays = [...byDay.keys()].sort((a, b) => a - b);
+  if (allDays.length) {
+    const today = parseDate(new Date().toISOString().slice(0, 10));
+    let run = null;
+    for (let d = Math.max(allDays[0], Date.UTC(new Date(today).getUTCFullYear() - 1, 0, 1)); d <= today; d += DAY) {
+      if (!byDay.has(d)) { run = run || [d, d]; run[1] = d; issues.blankDays++; }
+      else if (run) { issues.blankRuns.push(run); run = null; }
+    }
+    if (run) issues.blankRuns.push(run);
+  }
+  return issues;
+}
+
+// Take [from, to] out of ONE hand-entered trip (splitting it if needed); its bills on those days
+// move to the trip that the flights put him in on that day.
+async function trimTypedTrip(tripId, fromMs, toMs, flightCountry) {
+  const DAY = 86400000;
+  const t = trips.find(x => x.id === tripId);
+  if (!t) return;
+  await pushUndo();
+  const e = parseDate(t.entry), x = parseDate(t.exit);
+  const keepLeft = e < fromMs ? [e, fromMs - DAY] : null, keepRight = x > toMs ? [toMs + DAY, x] : null;
+  const billsOn = expenses.filter(ex => ex.tripId === t.id && ex.date && billRange(ex).start >= fromMs && billRange(ex).start <= toMs);
+  billsOn.forEach(ex => {
+    const d = billRange(ex).start;
+    const home = trips.find(o => o.country === flightCountry && overlapDays(o.entry, o.exit, d, d) > 0);
+    if (home) ex.tripId = home.id;
+  });
+  if (!keepLeft && !keepRight) trips = trips.filter(o => o !== t);
+  else {
+    if (keepLeft) { t.entry = fmt(keepLeft[0]); t.exit = fmt(keepLeft[1]); }
+    if (keepRight) {
+      if (keepLeft) {
+        const piece = Object.assign({}, t, { id: uid(), entry: fmt(keepRight[0]), exit: fmt(keepRight[1]) });
+        trips.push(piece);
+        expenses.forEach(ex => { if (ex.tripId === t.id && ex.date && billRange(ex).start > toMs) ex.tripId = piece.id; });
+      } else { t.entry = fmt(keepRight[0]); t.exit = fmt(keepRight[1]); }
+    }
+  }
+  await saveTrips(); await saveExpenses();
+  renderAll(); populateCloseYearSelect();
+}
+
 function renderUncoveredDaysCheck() {
   const el = document.getElementById('uncoveredDaysCheck');
   if (!el) return;
-  const days = new Set();
-  expenses.forEach(ex => {
-    if (!ex.date) return;
-    const r = billRange(ex);
-    for (let d = r.start; d <= r.end; d += 86400000) {
-      if (!trips.some(t => overlapDays(t.entry, t.exit, d, d) > 0)) days.add(fmt(d));
-    }
+  const is = findHealthIssues();
+  const nd = ms => niceDay(ms);
+  const goto = ms => { const s = fmt(ms); return '<a href="#" data-goto-month="' + s.slice(0, 7) + '" style="color:inherit;">' + nd(ms) + '</a>'; };
+  const parts = [];
+  is.conflicts.forEach((c, i) => {
+    const range = c.from === c.to ? goto(c.from) : goto(c.from) + ' – ' + nd(c.to);
+    const who = [...c.trips].map(t => tripPlaceLabel(t) + ' ' + t.entry.slice(5) + '→' + t.exit.slice(5) + (isFlightBacked(t) ? ' ✈' : '')).join(' and ');
+    let btns = '';
+    c.fixTrips.forEach(t => {
+      btns += '<button type="button" class="btn-primary hc-btn" data-hc-trim="' + t.id + '" data-hc-from="' + c.from + '" data-hc-to="' + c.to + '" data-hc-country="' + c.flightCountry + '">Follow the flight: ' + c.flightCountry + ' only</button>';
+    });
+    btns += '<button type="button" class="btn-secondary hc-btn" data-hc-ok="' + ('conflict:' + c.key + ':' + fmt(c.from) + ':' + fmt(c.to)) + '">Both are right (travel day)</button>';
+    parts.push('<div class="hc-item"><strong>' + range + ':</strong> in two countries with no flight logged — ' + who + '.<div>' + btns + '</div></div>');
   });
-  const list = [...days].sort();
-  if (list.length === 0) {
-    el.innerHTML = '<div class="hint" style="color:var(--green);">&#10003; Every day with a bill is covered by a trip (all years checked).</div>';
-    return;
+  is.dupLegs.forEach(g => {
+    const l = g[0];
+    parts.push('<div class="hc-item"><strong>' + goto(parseDate(l.depDate)) + ':</strong> the flight ' + (l.depCity || l.from).trim() + ' → ' + (l.arrCity || l.to).trim() + ' is logged ' + g.length + ' times.' +
+      '<div><button type="button" class="btn-primary hc-btn" data-hc-dupleg="' + g.slice(1).map(x => x.id).join(',') + '">Remove the extra cop' + (g.length > 2 ? 'ies' : 'y') + '</button></div></div>');
+  });
+  is.badLegs.forEach(b => {
+    const l = b.leg;
+    parts.push('<div class="hc-item"><strong>' + goto(parseDate(l.depDate)) + ':</strong> flight ' + (l.depCity || '').trim() + ' → ' + (l.arrCity || '').trim() + ' is saved as ' + (b.side === 'from' ? 'leaving from ' : 'arriving in ') + l[b.side] + ', but ' + b.city + ' is in ' + b.should + '.' +
+      '<div><button type="button" class="btn-primary hc-btn" data-hc-legfix="' + l.id + '" data-hc-side="' + b.side + '" data-hc-should="' + b.should + '">Change to ' + b.should + '</button>' +
+      '<button type="button" class="btn-secondary hc-btn" data-hc-ok="leg:' + l.id + ':' + b.side + '">It’s correct</button></div></div>');
+  });
+  if (is.billDays.length) {
+    const byMonth = {};
+    is.billDays.forEach(d => { (byMonth[d.slice(0, 7)] = byMonth[d.slice(0, 7)] || []).push(+d.slice(8)); });
+    parts.push('<div class="hc-item"><strong>' + is.billDays.length + ' day(s) have a bill but no trip:</strong> ' + Object.entries(byMonth).map(([ym, ds]) =>
+      '<a href="#" data-goto-month="' + ym + '" style="color:inherit; font-weight:bold;">' + new Date(ym + '-01T00:00:00Z').toLocaleDateString('en-GB', { month: 'short', year: 'numeric', timeZone: 'UTC' }) + '</a> (' + ds.join(', ') + ')').join(' &middot; ') + '</div>');
   }
-  // group by month so each month is one click
-  const byMonth = {};
-  list.forEach(d => { (byMonth[d.slice(0, 7)] = byMonth[d.slice(0, 7)] || []).push(+d.slice(8)); });
-  el.innerHTML = '<div class="print-note-box" style="border-color:var(--alert); background:#f5e0ee; color:#631253;">' +
-    '<strong>&#9888; ' + list.length + ' day(s) have a bill but no trip:</strong> ' +
-    Object.entries(byMonth).map(([ym, ds]) => {
-      const label = new Date(ym + '-01T00:00:00Z').toLocaleDateString('en-GB', { month: 'short', year: 'numeric', timeZone: 'UTC' });
-      return '<a href="#" data-goto-month="' + ym + '" style="color:inherit; font-weight:bold;">' + label + '</a> (' + ds.join(', ') + ')';
-    }).join(' &middot; ') +
-    '<div class="hint" style="margin-top:4px;">Click a month to jump there, then click a day and use \u201cWas there, no bill needed\u201d or edit the trip.</div></div>';
+  const blankLine = is.blankDays > 0
+    ? '<div class="hint" style="margin-top:6px;">&#9432; ' + is.blankDays + ' day(s) since last January aren’t in any country yet' +
+      (is.blankRuns.length ? ', the longest: ' + is.blankRuns.slice().sort((a, b) => (b[1] - b[0]) - (a[1] - a[0])).slice(0, 3).map(r => goto(r[0]) + (r[1] > r[0] ? ' – ' + nd(r[1]) : '')).join(', ') : '') +
+      '. These count for no country.</div>'
+    : '';
+  if (parts.length === 0) {
+    el.innerHTML = '<div class="hint" style="color:var(--green);">&#10003; Health check: no conflicts, duplicate flights or uncovered bills found (all years checked).</div>' + blankLine;
+  } else {
+    el.innerHTML = '<div class="print-note-box" style="border-color:var(--alert); background:#f5e0ee; color:#631253;">' +
+      '<strong>&#9888; Health check found ' + parts.length + ' thing(s) to look at:</strong>' + parts.join('') + blankLine + '</div>';
+  }
   el.querySelectorAll('[data-goto-month]').forEach(a => {
     a.onclick = e => {
       e.preventDefault();
       const [y, m] = a.dataset.gotoMonth.split('-').map(Number);
-      if (y !== calYear) jumpToYear(y); // keeps the lists and year filter in step with the calendar
+      if (y !== calYear) jumpToYear(y);
       calMonth = m - 1; renderCalendar();
       document.getElementById('calGrid').scrollIntoView({ behavior: 'smooth', block: 'center' });
     };
   });
+  el.querySelectorAll('[data-hc-trim]').forEach(b => b.onclick = async () => {
+    b.disabled = true;
+    await trimTypedTrip(b.dataset.hcTrim, +b.dataset.hcFrom, +b.dataset.hcTo, b.dataset.hcCountry);
+  });
+  el.querySelectorAll('[data-hc-ok]').forEach(b => b.onclick = async () => {
+    b.disabled = true;
+    reviewedChecks.push(b.dataset.hcOk); await saveReviewedChecks(); renderCalendar();
+  });
+  el.querySelectorAll('[data-hc-dupleg]').forEach(b => b.onclick = async () => {
+    b.disabled = true;
+    const ids = b.dataset.hcDupleg.split(',');
+    await pushUndo();
+    legs = legs.filter(l => !ids.includes(l.id));
+    await saveLegs(); await buildTripsFromLegs();
+  });
+  el.querySelectorAll('[data-hc-legfix]').forEach(b => b.onclick = async () => {
+    b.disabled = true;
+    const l = legs.find(x => x.id === b.dataset.hcLegfix);
+    if (!l) return;
+    await pushUndo();
+    l[b.dataset.hcSide] = b.dataset.hcShould;
+    await saveLegs(); await buildTripsFromLegs();
+  });
 }
+function niceDay(ms) { return new Date(ms).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }); }
 function renderCalendar() {
   renderUncoveredDaysCheck();
   document.getElementById('calMonthLabel').textContent = new Date(Date.UTC(calYear, calMonth, 1)).toLocaleDateString('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' });
@@ -3142,7 +3304,7 @@ async function cleanupLegacyUndoFields() {
 // A tab left open keeps running the old version after an update is uploaded, so new bills can
 // miss newer features (e.g. a type that didn't exist yet). Every few minutes, and whenever the
 // tab comes back into view, compare this page's version with the one that's live.
-const APP_VERSION = '2026-10-02a';
+const APP_VERSION = '2026-10-02b';
 async function checkForNewerVersion() {
   try {
     const res = await fetch(location.href.split('#')[0], { cache: 'no-store' });
