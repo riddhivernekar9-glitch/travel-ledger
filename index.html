@@ -1325,13 +1325,14 @@ async function setCityForDays(fromStr, toStr, city) {
 // "Not there / don't know where": take these days out of every trip that covers them, splitting
 // a trip in two when the days are in the middle. Flight-built stretches are first turned into
 // hand-kept trips (keeping the boarding-pass badge) so the change survives the next reload.
-async function removeDaysFromTrips(fromStr, toStr) {
+async function removeDaysFromTrips(fromStr, toStr, onlyCountry) {
   const DAY = 86400000;
   const from = parseDate(fromStr), to = parseDate(toStr);
   if (isNaN(from) || isNaN(to) || to < from) return 0;
   await pushUndo();
   let touched = 0;
-  trips.filter(t => overlapDays(t.entry, t.exit, from, to) > 0).forEach(orig => {
+  const affectedIds = new Set();
+  trips.filter(t => overlapDays(t.entry, t.exit, from, to) > 0 && (!onlyCountry || t.country === onlyCountry)).forEach(orig => {
     touched++;
     let t = orig;
     if (t.derived) {
@@ -1339,6 +1340,7 @@ async function removeDaysFromTrips(fromStr, toStr) {
       expenses.forEach(ex => { if (ex.tripId === orig.id) ex.tripId = t.id; });
       trips[trips.indexOf(orig)] = t;
     }
+    affectedIds.add(t.id);
     const e = parseDate(t.entry), x = parseDate(t.exit);
     const left = e < from ? [e, from - DAY] : null;
     const right = x > to ? [to + DAY, x] : null;
@@ -1352,6 +1354,15 @@ async function removeDaysFromTrips(fromStr, toStr) {
         expenses.forEach(ex => { if (ex.tripId === t.id && ex.date && billRange(ex).start > to) ex.tripId = piece.id; });
       } else { t.entry = fmt(right[0]); t.exit = fmt(right[1]); }
     }
+  });
+  // Bills on the removed days that belonged to those trips move to whichever trip still covers
+  // the day (e.g. the other country), so they don't end up on a trip that no longer includes them.
+  expenses.forEach(ex => {
+    if (!ex.date || !affectedIds.has(ex.tripId)) return;
+    const d = billRange(ex).start;
+    if (d < from || d > to) return;
+    const home = trips.find(o => !affectedIds.has(o.id) && overlapDays(o.entry, o.exit, d, d) > 0);
+    if (home) ex.tripId = home.id;
   });
   await saveTrips(); await saveExpenses();
   renderAll(); populateCloseYearSelect();
@@ -1444,6 +1455,11 @@ function showDayDetailPanel(dateStr) {
     .sort((a, b) => a.gap - b.gap)[0];
   const defaultCountry = dayTrips[0] ? dayTrips[0].country : nearest ? nearest.t.country : 'United Arab Emirates';
   const curCity = dayNotes[dateStr] || (dayTrips[0] ? tripPlace(dayTrips[0]) : '');
+  // On a two-country day, "take off" asks which country; it defaults to the typed-in trip when a
+  // boarding pass backs the other one (the usual mistake), so the flight-confirmed country stays.
+  const dayCountries = [...new Set(dayTrips.map(t => t.country))];
+  const typedOnly = dayCountries.filter(c => !dayTrips.some(t => t.country === c && (t.derived || t.fromBoardingPass)));
+  const removeDefault = typedOnly.length === 1 && dayCountries.length > 1 ? typedOnly[0] : dayCountries[0];
   const row = 'display:flex; gap:6px; flex-wrap:wrap; align-items:center; font-size:13px; margin-top:8px;';
   const q = v => (v || '').replace(/"/g, '&quot;');
   html += '<div style="margin-top:14px; padding:10px; border:1px solid var(--line); border-radius:4px; background:var(--paper-card);">' +
@@ -1455,7 +1471,11 @@ function showDayDetailPanel(dateStr) {
       '<input type="text" id="dayCityInput" value="' + q(curCity) + '" placeholder="e.g. Selva" style="width:150px;">' +
       '<button type="button" class="btn-primary" id="dayCityBtn">Set city</button></div>' +
       '<div style="' + row + '"><span style="min-width:120px;">Not there / unknown</span>' +
-      '<button type="button" class="btn-secondary" id="dayRemoveBtn">Take these days out of the trip</button></div>'
+      (dayCountries.length > 1
+        ? '<span>take</span><select id="dayRemoveCountry">' + dayCountries.map(c => '<option value="' + c + '"' + (c === removeDefault ? ' selected' : '') + '>' + c + '</option>').join('') +
+          '<option value="">all countries</option></select><span>off these days</span>'
+        : '') +
+      '<button type="button" class="btn-secondary" id="dayRemoveBtn">' + (dayCountries.length > 1 ? 'Take off' : 'Take these days out of the trip') + '</button></div>'
       : '') +
     '<div style="' + row + '"><span style="min-width:120px;">Was there (no bill)</span>' +
     '<select id="dayMarkCountry" style="max-width:200px;">' + WORLD_COUNTRIES.map(c => '<option value="' + c + '"' + (c === defaultCountry ? ' selected' : '') + '>' + c + '</option>').join('') + '</select>' +
@@ -1492,12 +1512,16 @@ function showDayDetailPanel(dateStr) {
     document.getElementById('dayRemoveBtn').onclick = async () => {
       const r = rangeOk(); if (!r) return;
       const f = parseDate(r[0]), t = parseDate(r[1]);
-      const bills = expenses.filter(ex => ex.date && billRange(ex).start <= t && billRange(ex).end >= f);
-      const ok = confirm('Take ' + r[0] + (r[1] !== r[0] ? ' to ' + r[1] : '') + ' out of the trip?\n\nThose days will count for no country.' +
+      const sel = document.getElementById('dayRemoveCountry');
+      const only = sel ? sel.value : '';
+      const remaining = only ? dayCountries.filter(c => c !== only) : [];
+      const bills = remaining.length ? [] : expenses.filter(ex => ex.date && billRange(ex).start <= t && billRange(ex).end >= f);
+      const ok = confirm('Take ' + (only ? only + ' off ' : '') + r[0] + (r[1] !== r[0] ? ' to ' + r[1] : '') + (only ? '' : ' out of the trip') + '?\n\n' +
+        (remaining.length ? 'Those days will then be ' + remaining.join(' + ') + ' only.' : 'Those days will count for no country.') +
         (bills.length ? '\n\n\u26a0 ' + bills.length + ' bill(s) fall on these days, so they will show as magenta (a bill with no trip):\n' + bills.slice(0, 8).map(b => '\u2022 ' + b.date + ' ' + b.category + (b.vendor ? ' \u2014 ' + b.vendor : '')).join('\n') : '') +
         '\n\nUndo reverses this.');
       if (!ok) return;
-      await removeDaysFromTrips(r[0], r[1]);
+      await removeDaysFromTrips(r[0], r[1], only);
       showDayDetailPanel(dateStr);
     };
   }
@@ -2497,7 +2521,14 @@ function extendTripToCoverBill(ex) {
   const { start, end } = billRange(ex);
   const tEntry = parseDate(trip.entry), tExit = parseDate(trip.exit);
   if (start >= tEntry && end <= tExit) return false;
-  const newEntry = Math.min(start, tEntry), newExit = Math.max(end, tExit);
+  let newEntry = Math.min(start, tEntry), newExit = Math.max(end, tExit);
+  // Only stretch over days that have no trip at all. A day already in another country is covered
+  // (no magenta), and stretching onto it would create a false two-country day, which is how a
+  // Dubai bill dated on a Rome day kept pulling the Dubai trip back onto that day.
+  const otherCountryOn = d => trips.some(o => o.country !== trip.country && overlapDays(o.entry, o.exit, d, d) > 0);
+  for (let d = tExit + 86400000; d <= newExit; d += 86400000) if (otherCountryOn(d)) { newExit = d - 86400000; break; }
+  for (let d = tEntry - 86400000; d >= newEntry; d -= 86400000) if (otherCountryOn(d)) { newEntry = d + 86400000; break; }
+  if (newEntry === tEntry && newExit === tExit) return false;
   const addedDays = ((tEntry - newEntry) + (newExit - tExit)) / 86400000;
   if (addedDays > MAX_AUTO_EXTEND_DAYS) return false;
   let saved;
@@ -3304,7 +3335,7 @@ async function cleanupLegacyUndoFields() {
 // A tab left open keeps running the old version after an update is uploaded, so new bills can
 // miss newer features (e.g. a type that didn't exist yet). Every few minutes, and whenever the
 // tab comes back into view, compare this page's version with the one that's live.
-const APP_VERSION = '2026-10-02b';
+const APP_VERSION = '2026-10-07a';
 async function checkForNewerVersion() {
   try {
     const res = await fetch(location.href.split('#')[0], { cache: 'no-store' });
