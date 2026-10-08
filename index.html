@@ -1914,6 +1914,7 @@ function renderCalendar() {
     const tagText = tags.length > 0 ? ' (' + tags.map(tg => '<b>' + tg + '</b>').join(', ') + ')' : '';
     const transitChain = findTransitChainForDay(dateStr, dayMs);
     const dayNoteOverride = dayNotes[dateStr] || '';
+    let noteShownInCell = false;
     const cell = document.createElement('div');
     cell.className = 'cal-day' + (dateStr === todayStr ? ' today' : '');
     cell.style.position = 'relative';
@@ -1978,6 +1979,7 @@ function renderCalendar() {
         // typed state, the arrival city on a logged boarding pass, or a one-day manual label.
         cell.style.background = colors.bg; cell.style.borderColor = colors.border;
         cell.innerHTML = '<span class="dnum">' + d + '</span><span class="dcountry" style="color:' + colors.text + '">' + (trip.country || trip.region) + stateText + tagText + '</span>';
+        noteShownInCell = true; // the label already appears in brackets as the place
       }
     } else if (tags.length > 0) {
       // No trip logged for this day, but a bill/receipt exists \u2014 flag it boldly so it's not missed.
@@ -1989,6 +1991,13 @@ function renderCalendar() {
         '<span class="dcountry" style="color:#fff;">&#9888; ' + tagText.trim() + '</span>';
     } else {
       cell.innerHTML = '<span class="dnum">' + d + '</span>';
+    }
+    // Every other kind of day (flight day, two-country day, bill-only or empty day) used to drop
+    // the label silently. Show it as its own small line so a remark is never invisible.
+    if (dayNoteOverride && !noteShownInCell) {
+      const onDark = !!cell.querySelector('.dnum[style*="#fff"]'); // flight / alert days use white text
+      cell.insertAdjacentHTML('beforeend', '<div class="day-note-line" style="font-size:10px; font-style:italic; margin-top:2px; line-height:1.15; color:' + (onDark ? '#fff' : 'var(--ink)') + ';">&#128221; ' +
+        dayNoteOverride.replace(/</g, '&lt;') + '</div>');
     }
     // A small pencil in the corner of EVERY day, no matter what \u2014 a trip, no trip, or a
     // genuine multi-country day \u2014 so a remark can always be added right there, on any date.
@@ -3335,7 +3344,7 @@ async function cleanupLegacyUndoFields() {
 // A tab left open keeps running the old version after an update is uploaded, so new bills can
 // miss newer features (e.g. a type that didn't exist yet). Every few minutes, and whenever the
 // tab comes back into view, compare this page's version with the one that's live.
-const APP_VERSION = '2026-10-07a';
+const APP_VERSION = '2026-10-08a';
 async function checkForNewerVersion() {
   try {
     const res = await fetch(location.href.split('#')[0], { cache: 'no-store' });
