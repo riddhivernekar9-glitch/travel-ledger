@@ -811,47 +811,53 @@ async function storageGetRaw(key) {
     return firestoreCache[key] != null ? firestoreCache[key] : null;
   } catch (e) { storageMode = 'none'; return null; }
 }
+// Saving never blocks the screen: the change is applied on screen and in the local cache at once,
+// and the upload to Firebase finishes in the background. Previously every edit (even typing a
+// city) waited for the upload to finish, which on a slow connection felt like the app froze.
+// A "saving…" / "✓ all changes saved" note next to the date shows where things stand, a failed
+// upload still raises the loud SAVE FAILED warning, and closing the page while something is
+// still uploading asks first.
+let pendingSaves = 0;
+function updateSaveIndicator() {
+  const el = document.getElementById('lastSaved');
+  if (!el) return;
+  if (pendingSaves > 0) { el.textContent = 'saving…'; el.style.color = 'var(--ink-soft)'; }
+  else { el.textContent = '✓ all changes saved ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); el.style.color = 'var(--green)'; }
+}
+window.addEventListener('beforeunload', e => { if (pendingSaves > 0) { e.preventDefault(); e.returnValue = ''; } });
 async function storageSetRaw(key, value) {
-  try {
-    const { db, doc, setDoc } = window.__fb;
-    if (isUndoRedoKey(key)) {
-      // Undo/redo history lives in its OWN document, completely separate from trips/legs/expenses.
-      // This is on purpose: undo history can grow large, and it must never be able to block or
-      // slow down saving your actual travel data, even if it ever hits its own size limit.
-      if (!undoRedoCache) undoRedoCache = await getUndoRedoDoc();
-      undoRedoCache[key] = value;
-      await setDoc(doc(db, ...UNDO_DOC_PATH), { [key]: value }, { merge: true });
-      storageMode = 'firebase';
-      return true;
-    }
-    if (!firestoreCache) firestoreCache = await getFirestoreDoc();
-    firestoreCache[key] = value;
-    suppressNextSnapshotReload = true;
-    await setDoc(doc(db, ...SHARED_DOC_PATH), { [key]: value }, { merge: true });
+  const { db, doc, setDoc } = window.__fb;
+  const isUndo = isUndoRedoKey(key);
+  // Undo/redo history lives in its OWN document, so it can never block or slow saving the real data.
+  if (isUndo) { if (undoRedoCache) undoRedoCache[key] = value; }
+  else if (firestoreCache) firestoreCache[key] = value;
+  pendingSaves++; updateSaveIndicator();
+  let write;
+  try { write = setDoc(doc(db, ...(isUndo ? UNDO_DOC_PATH : SHARED_DOC_PATH)), { [key]: value }, { merge: true }); }
+  catch (e) { write = Promise.reject(e); }
+  write.then(() => {
     storageMode = 'firebase';
-    scheduleDailyBackup();
-    return true;
-  } catch (e) {
+    if (!isUndo) scheduleDailyBackup();
+  }).catch(e => {
     storageMode = 'none';
-    // A save failure used to be swallowed here with no visible sign at all — the exact
-    // gap that let a bad Undo write silently fail to persist while the UI moved on as if
-    // it had succeeded. Now it's surfaced loudly, front and center, so it can never be missed.
     console.error('Firestore save failed for "' + key + '":', e);
     const el = document.getElementById('loadstatus');
     const msg = '⚠ SAVE FAILED (' + key + ') — your last change may NOT be saved! ' + (e && e.message ? e.message : 'Check your connection and try again.');
     if (el) { el.textContent = msg; el.style.color = '#a3312c'; el.style.fontWeight = 'bold'; }
-    try { alert(msg); } catch (e2) {}
-    return false;
-  }
+    if (!isUndo) { try { alert(msg); } catch (e2) {} } // a lost undo copy isn't worth interrupting for
+  }).finally(() => { pendingSaves--; updateSaveIndicator(); });
+  return true;
 }
 
 function startLiveSync() {
   const { db, doc, onSnapshot } = window.__fb;
   onSnapshot(doc(db, ...SHARED_DOC_PATH), (snap) => {
-    if (suppressNextSnapshotReload) { suppressNextSnapshotReload = false; return; }
+    if (snap.metadata && snap.metadata.hasPendingWrites) return; // the echo of our own unsaved change
     if (!snap.exists()) return;
     const incoming = snap.data();
-    if (firestoreCache && JSON.stringify(incoming) === JSON.stringify(firestoreCache)) return; // nothing actually changed
+    const sameAsMine = firestoreCache && [...new Set([...Object.keys(incoming), ...Object.keys(firestoreCache)])]
+      .every(k => JSON.stringify(incoming[k]) === JSON.stringify(firestoreCache[k]));
+    if (sameAsMine) return; // nothing actually changed
     firestoreCache = incoming;
     loadAll().then(() => {
       renderAll();
@@ -863,10 +869,7 @@ function startLiveSync() {
     });
   });
 }
-function touchLastSaved() {
-  const el = document.getElementById('lastSaved');
-  if (el) el.textContent = 'last saved ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-}
+function touchLastSaved() { updateSaveIndicator(); }
 async function loadAll() {
   try { const v = await storageGetRaw('trips-list'); trips = v ? JSON.parse(v) : []; } catch (e) { trips = []; }
   try {
@@ -894,8 +897,7 @@ async function loadAll() {
   try { const v = await storageGetRaw('reviewed-checks'); reviewedChecks = v ? JSON.parse(v) : []; } catch (e) { reviewedChecks = []; }
   try { const t = await storageGetRaw('uk-threshold'); if (t) ukThresh = Number(t); } catch (e) {}
   try { const t = await storageGetRaw('uae-threshold'); if (t) uaeThresh = Number(t); } catch (e) {}
-  try { const v = await storageGetRaw('undo-stack'); undoStack = v ? JSON.parse(v) : []; } catch (e) { undoStack = []; }
-  try { const v = await storageGetRaw('redo-stack'); redoStack = v ? JSON.parse(v) : []; } catch (e) { redoStack = []; }
+  // undo/redo history is loaded separately, after the page is on screen (see loadUndoRedoLater)
 }
 
 function snapshotState() {
@@ -929,9 +931,33 @@ async function writeBackupNow(reason) {
     console.error('Daily backup failed:', e);
   }
 }
+// Undo history is kept in full on screen, but only the last 3 steps (and 1 redo) are saved online,
+// a couple of seconds after the last change. Each step is a full copy of the ledger (~130 KB), so
+// uploading 6 of them after every single edit was the main reason the app felt slow.
+const UNDO_SAVED = 3, REDO_SAVED = 1;
+// Firebase refuses any single value over ~1 MB, and each undo step is a full copy of the ledger,
+// so as the ledger grows fewer steps fit. Keep the newest steps that fit under the byte budget
+// rather than letting the save fail. Undo and redo share one document, which also has a 1 MB
+// ceiling, so undo gets up to ~650 KB and redo ~300 KB.
+function newestThatFit(stack, maxSteps, maxBytes) {
+  const out = []; let size = 2;
+  for (let i = stack.length - 1; i >= 0 && out.length < maxSteps; i--) {
+    const n = JSON.stringify(stack[i]).length + 1; // size as it will actually be stored (quotes escaped)
+    if (size + n > maxBytes) break;
+    out.unshift(stack[i]); size += n;
+  }
+  return out;
+}
+let undoPersistTimer = null;
 async function persistUndoRedo() {
-  try { await storageSetRaw('undo-stack', JSON.stringify(undoStack)); } catch (e) {}
-  try { await storageSetRaw('redo-stack', JSON.stringify(redoStack)); } catch (e) {}
+  if (undoPersistTimer) clearTimeout(undoPersistTimer);
+  else { pendingSaves++; updateSaveIndicator(); } // counts as "saving…" until it's uploaded
+  undoPersistTimer = setTimeout(() => {
+    undoPersistTimer = null;
+    storageSetRaw('undo-stack', JSON.stringify(newestThatFit(undoStack, UNDO_SAVED, 650000)));
+    storageSetRaw('redo-stack', JSON.stringify(newestThatFit(redoStack, REDO_SAVED, 300000)));
+    pendingSaves--; updateSaveIndicator();
+  }, 1500);
 }
 async function pushUndo() {
   undoStack.push(snapshotState());
@@ -3344,7 +3370,7 @@ async function cleanupLegacyUndoFields() {
 // A tab left open keeps running the old version after an update is uploaded, so new bills can
 // miss newer features (e.g. a type that didn't exist yet). Every few minutes, and whenever the
 // tab comes back into view, compare this page's version with the one that's live.
-const APP_VERSION = '2026-10-08a';
+const APP_VERSION = '2026-10-12a';
 async function checkForNewerVersion() {
   try {
     const res = await fetch(location.href.split('#')[0], { cache: 'no-store' });
@@ -3366,6 +3392,17 @@ function autoTypeFromVendor(ex) {
   return false;
 }
 
+// The saved undo history is large, so it's fetched after the calendar is already showing.
+// Anything done meanwhile stays on top of it.
+async function loadUndoRedoLater() {
+  try {
+    const u = await storageGetRaw('undo-stack'), r = await storageGetRaw('redo-stack');
+    const savedUndo = u ? JSON.parse(u) : [], savedRedo = r ? JSON.parse(r) : [];
+    undoStack = savedUndo.concat(undoStack).slice(-UNDO_LIMIT);
+    if (redoStack.length === 0) redoStack = savedRedo;
+    updateUndoButton(); updateRedoButton();
+  } catch (e) {}
+}
 async function initLedger() {
   if (__ledgerInitialized) return;
   __ledgerInitialized = true;
@@ -3381,6 +3418,7 @@ async function initLedger() {
   updateUndoButton();
   updateRedoButton();
   updateYearFilterLabel();
+  loadUndoRedoLater();
   if (legs.length > 0) await buildTripsFromLegs();
   // Every bill's days covered by its own trip (see extendTripToCoverBill). Done on load too, so
   // data logged before this rule existed is repaired without anyone having to redo anything.
