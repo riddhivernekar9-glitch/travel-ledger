@@ -224,11 +224,12 @@
   <div class="step" id="pdfImportStep">
     <h2>Add bookings &amp; bills from files or photos</h2>
     <p class="hint" style="margin-bottom:10px;">Airline e-tickets and itineraries (Emirates, British Airways, KLM, Lufthansa&hellip;) hotel confirmations (Hilton, Marriott&hellip;), boarding passes, and bills or receipts (restaurant, taxi, shop, laundry&hellip;) &mdash; as PDF, photo (JPEG, PNG&hellip;), saved web page (HTML) or saved email (.eml). On a phone you can take the photo straight from the camera.
-      <b>The files are read on this device only &mdash; they are never uploaded or stored.</b> New flights, hotel stays and bills go straight into the calendar; anything already logged (e.g. from a boarding pass) is skipped; only items that clash with the ledger wait for your yes / no. Nothing already in the ledger is changed, and Undo reverses an import.</p>
+      <b>The files are read on this device only &mdash; they are never uploaded or stored.</b> New flights, hotel stays and bills go straight into the calendar; anything already logged (e.g. from a boarding pass) is skipped; anything that would change a day already on the calendar waits for your yes / no. Everything added is listed below with a Remove button, and Undo reverses a whole import.</p>
     <label class="btn-primary" style="display:inline-block; cursor:pointer; padding:8px 14px;">Choose files or photos&hellip;
       <input type="file" id="pdfImportInput" accept="application/pdf,.pdf,image/*,.heic,.heif,.html,.htm,.mht,.eml,.txt,text/html,text/plain,message/rfc822" multiple style="display:none;"></label>
     <div id="pdfImportStatus" class="hint" style="margin-top:8px;"></div>
     <div id="pdfImportReview"></div>
+    <div id="pdfImportAdded"></div>
   </div>
 
   <div class="step">
@@ -3380,7 +3381,7 @@ async function cleanupLegacyUndoFields() {
 // A tab left open keeps running the old version after an update is uploaded, so new bills can
 // miss newer features (e.g. a type that didn't exist yet). Every few minutes, and whenever the
 // tab comes back into view, compare this page's version with the one that's live.
-const APP_VERSION = '2026-10-16f';
+const APP_VERSION = '2026-10-16g';
 async function checkForNewerVersion() {
   try {
     const res = await fetch(location.href.split('#')[0], { cache: 'no-store' });
@@ -3823,6 +3824,77 @@ let importItems = [];   // everything found in the PDFs so far, waiting for appr
 const esc = v => String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
 const DAYMS = 86400000;
 
+// ---- "never change what's already there": what a new flight would do to the calendar ----
+// A flight doesn't only mark its own day: the calendar fills the days after it with the
+// destination until the next flight. So a wrong or mis-dated flight can repaint a whole stretch.
+// This works out the flight-built stretches with and without the new flight, and reports any day
+// that already shows a country and would change.
+function derivedStretches(legList) {
+  if (!legList.length) return [];
+  const sorted = chainAwareSortLegs(legList);
+  const out = [{ country: sorted[0].from, entry: parseDate(sorted[0].depDate), exit: parseDate(sorted[0].depDate) }];
+  sorted.forEach((l, i) => {
+    const next = sorted[i + 1];
+    const exit = next && next.from === l.to ? parseDate(next.depDate) : parseDate(l.arrDate || l.depDate);
+    const entry = parseDate(l.arrDate || l.depDate);
+    if (exit >= entry) out.push({ country: l.to, entry, exit });
+  });
+  return out;
+}
+const fmtD0 = ms => new Date(ms).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+function flightChangesHistory(it) {
+  const cand = { id: '__cand', depDate: it.depDate, from: it.from, to: it.to, arrDate: it.arrDate || it.depDate };
+  const before = derivedStretches(legs), after = derivedStretches(legs.concat([cand]));
+  const key = s => s.country + '|' + s.entry + '|' + s.exit;
+  const bk = new Set(before.map(key)), ak = new Set(after.map(key));
+  const changed = before.filter(s => !ak.has(key(s))).concat(after.filter(s => !bk.has(key(s))));
+  const days = new Set();
+  changed.forEach(s => { for (let d = s.entry; d <= s.exit && d - s.entry < 400 * DAYMS; d += DAYMS) days.add(d); });
+  const at = (list, d) => new Set(list.filter(s => s.entry <= d && d <= s.exit).map(s => s.country));
+  const tripById = new Map(trips.map(t => [t.id, t]));
+  const travelDays = new Set([parseDate(cand.depDate), parseDate(cand.arrDate)]);
+  const conflicts = [];
+  [...days].sort((a, b) => a - b).forEach(d => {
+    // what's backed by something other than flights: hand-kept trips, and bills (by their trip's country)
+    const evidence = new Set(trips.filter(t => !t.derived && overlapDays(t.entry, t.exit, d, d) > 0).map(t => t.country));
+    const billCountries = new Set();
+    expenses.forEach(ex => { if (ex.date && billCoversDay(ex, d)) { const t = tripById.get(ex.tripId); if (t) { evidence.add(t.country); billCountries.add(t.country); } } });
+    const shown = new Set([...at(before, d), ...evidence]);
+    if (!shown.size) return; // an empty day: filling it in changes nothing that's there
+    const will = new Set([...at(after, d), ...evidence]);
+    const added = [...will].filter(c => !shown.has(c) && !(travelDays.has(d) && (c === cand.from || c === cand.to)));
+    const removed = [...shown].filter(c => !will.has(c));
+    if (added.length || removed.length) conflicts.push({ d, was: [...shown], bills: [...billCountries], added, will: [...will] });
+  });
+  // the days either side of the flight: he must be in the departure country the day before
+  // (unless another flight brings him there) and in the arrival country the day after (unless he flies on)
+  const edges = [];
+  const countriesOn = d => new Set(trips.filter(t => overlapDays(t.entry, t.exit, d, d) > 0).map(t => t.country));
+  const dep = parseDate(cand.depDate), arr = parseDate(cand.arrDate);
+  const dayBefore = countriesOn(dep - DAYMS);
+  const flewIn = legs.some(l => l.to === cand.from && (parseDate(l.arrDate || l.depDate) === dep || parseDate(l.arrDate || l.depDate) === dep - DAYMS));
+  if (dayBefore.size && !dayBefore.has(cand.from) && !flewIn) edges.push('the ledger has him in ' + [...dayBefore].join(' + ') + ' on ' + fmtD0(dep - DAYMS) + ', but this flight leaves from ' + cand.from);
+  const dayAfter = countriesOn(arr + DAYMS);
+  const flewOn = legs.some(l => l.from === cand.to && (parseDate(l.depDate) === arr || parseDate(l.depDate) === arr + DAYMS));
+  if (dayAfter.size && !dayAfter.has(cand.to) && !flewOn) edges.push('the ledger has him in ' + [...dayAfter].join(' + ') + ' on ' + fmtD0(arr + DAYMS) + ', the day after this flight lands in ' + cand.to);
+  const similar = legs.find(l => l.from === it.from && l.to === it.to && l.depDate !== it.depDate && Math.abs(parseDate(l.depDate) - parseDate(it.depDate)) <= 5 * DAYMS);
+  const similarText = similar ? 'It looks like the ' + similar.from + ' → ' + similar.to + ' flight already logged on ' + fmtD0(parseDate(similar.depDate)) + ' (a booking or miles statement can show a different date).' : '';
+  if (!conflicts.length && !edges.length && !similar) return null;
+  if (!conflicts.length) return { text: [similarText, edges.length ? (similarText ? 'Also: ' : 'Check this flight: ') + edges.join('; ') + '.' : ''].filter(Boolean).join(' '), days: 0 };
+  // e.g. "28 Apr – 3 May 2025: shows United Arab Emirates (bills there too); this flight would add Singapore"
+  const fmtD = ms => new Date(ms).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+  const groups = [];
+  conflicts.forEach(c => {
+    const g = groups[groups.length - 1], sig = c.was.join(',') + '>' + c.will.join(',');
+    if (g && g.sig === sig && c.d - g.to === DAYMS) { g.to = c.d; g.bills = g.bills || c.bills.length > 0; }
+    else groups.push({ sig, from: c.d, to: c.d, was: c.was, will: c.will, bills: c.bills.length > 0 });
+  });
+  const text = 'This flight would change days already on the calendar: ' + groups.slice(0, 3).map(g =>
+      (g.from === g.to ? fmtD(g.from) : fmtD(g.from) + ' – ' + fmtD(g.to)) + ' shows ' + g.was.join(' + ') + (g.bills ? ' (bills there)' : '') +
+      ' \u2192 would show ' + (g.will.length ? g.will.join(' + ') : 'nothing')).join('; ') + (groups.length > 3 ? '; and more' : '') + '.' + (similarText ? ' ' + similarText : '') + (edges.length ? ' Also: ' + edges.join('; ') + '.' : '');
+  return { text, days: conflicts.length };
+}
+
 function importStatus(it) {
   if (it.added) return { code: 'added', text: '✓ added' };
   if (it.kind === 'flight') {
@@ -3836,6 +3908,8 @@ function importStatus(it) {
       trips.filter(t => t.country !== it.from && t.country !== it.to && overlapDays(t.entry, t.exit, d, d) > 0).forEach(t => clash.set(t.id, t));
     });
     if (clash.size) return { code: 'overlap', text: 'Overlaps: the ledger has him in ' + [...clash.values()].map(t => tripPlaceLabel(t) + ' ' + t.entry + ' \u2192 ' + t.exit).join('; ') + ' that day' };
+    const change = flightChangesHistory(it);
+    if (change) return { code: 'overlap', text: change.text };
     if (it.yearGuessed) return { code: 'confirm', text: 'A boarding pass doesn\u2019t print the year \u2014 it was taken as ' + it.depDate.slice(0, 4) + '. Check the date, then add it.' };
     return { code: 'new', text: 'New' };
   }
@@ -4030,8 +4104,19 @@ async function readPdfFiles(files) {
   const already = fresh.filter(it => importStatus(it).code === 'already');
   already.forEach(it => { it.discarded = true; });
   const toAdd = [];
-  fresh.forEach(it => { if (!it.discarded && importStatus(it).code === 'new') toAdd.push(it); });
-  if (toAdd.length) await addImportedItems(toAdd, true);
+  // one at a time (flights in date order), so each check already sees what was just added;
+  // one undo step for the whole import
+  const byDate = it => it.depDate || it.checkIn || it.date || '';
+  const queue = fresh.filter(it => !it.discarded).sort((a, b) => order[a.kind] - order[b.kind] || byDate(a).localeCompare(byDate(b)));
+  let undoTaken = false;
+  for (const it of queue) {
+    if (importStatus(it).code !== 'new') continue;
+    if (!undoTaken) { await pushUndo(); undoTaken = true; }
+    await addImportedItems([it], true, true);
+    toAdd.push(it);
+  }
+  if (toAdd.length) { renderAll(); populateCloseYearSelect(); }
+  renderImportAdded();
   const fl = toAdd.filter(i => i.kind === 'flight').length, ho = toAdd.filter(i => i.kind === 'hotel').length, bi = toAdd.filter(i => i.kind === 'bill').length;
   const held = fresh.filter(it => !it.added && !it.discarded).length;
   const addedParts = [fl ? fl + ' flight' + (fl > 1 ? 's' : '') : '', ho ? ho + ' hotel stay' + (ho > 1 ? 's' : '') : '', bi ? bi + ' bill' + (bi > 1 ? 's' : '') : ''].filter(Boolean);
@@ -4058,18 +4143,19 @@ async function readPdfFiles(files) {
     pre.style.display = pre.style.display === 'none' ? 'block' : 'none';
   });
   const u = document.getElementById('pdfImportUndo');
-  if (u) u.onclick = async () => { await performUndo(); status.innerHTML = 'Import undone.'; importItems = importItems.filter(it => !toAdd.includes(it)); renderImportReview(); };
+  if (u) u.onclick = async () => { const before = undoStack.length; await performUndo(); if (undoStack.length === before) return; status.innerHTML = 'Import undone.'; importItems = importItems.filter(it => !toAdd.includes(it)); importAdded = importAdded.filter(it => !toAdd.includes(it)); renderImportAdded(); renderImportReview(); };
   renderImportReview();
 }
 
 // adds the given items (flights become boarding-pass entries; hotel stays join or start a trip)
-async function addImportedItems(chosen, isBatch) {
+async function addImportedItems(chosen, isBatch, inBatch) {
   chosen = chosen.filter(it => !it.added);
   if (!chosen.length) return;
-  await pushUndo();
+  if (!inBatch) await pushUndo();
   const flights = chosen.filter(it => it.kind === 'flight'), hotels = chosen.filter(it => it.kind === 'hotel');
   flights.forEach(it => {
-    legs.push({ id: uid(), depDate: it.depDate, from: it.from, depCity: it.depCity || '', to: it.to, arrDate: it.arrDate || it.depDate, arrCity: it.arrCity || '' });
+    it.legId = uid();
+    legs.push({ id: it.legId, depDate: it.depDate, from: it.from, depCity: it.depCity || '', to: it.to, arrDate: it.arrDate || it.depDate, arrCity: it.arrCity || '' });
     it.added = true;
   });
   if (flights.length) { await saveLegs(); await buildTripsFromLegs(); }
@@ -4080,8 +4166,10 @@ async function addImportedItems(chosen, isBatch) {
     if (!trip) {
       trip = { id: uid(), country: it.country, region: mapCountryToRegion(it.country), state: it.city || '', entry: fmt(cin), exit: fmt(lastNight), note: '', evidenceOnly: false };
       trips.push(trip);
+      it.createdTripId = trip.id;
     }
-    const bill = { id: uid(), tripId: trip.id, category: 'Hotel', vendor: it.hotel || 'Hotel', date: it.checkIn, endDate: it.checkOut, fromPlace: null, toPlace: null, uaeResidence: false,
+    it.billId = uid();
+    const bill = { id: it.billId, tripId: trip.id, category: 'Hotel', vendor: it.hotel || 'Hotel', date: it.checkIn, endDate: it.checkOut, fromPlace: null, toPlace: null, uaeResidence: false,
       amount: it.amount != null ? Number(it.amount) : null, currency: it.currency || null };
     expenses.push(bill);
     extendTripToCoverBill(bill);
@@ -4094,16 +4182,68 @@ async function addImportedItems(chosen, isBatch) {
       trip = { id: uid(), country: it.country, region: mapCountryToRegion(it.country), state: '', entry: it.date, exit: it.date, note: '', evidenceOnly: true };
       trips.push(trip);
       resolveOverlaps(trip, true);
+      it.createdTripId = trip.id;
     }
-    const bill = { id: uid(), tripId: trip.id, category: it.category || 'Other', vendor: it.vendor || '', date: it.date, endDate: null, fromPlace: null, toPlace: null, uaeResidence: false,
+    it.billId = uid();
+    const bill = { id: it.billId, tripId: trip.id, category: it.category || 'Other', vendor: it.vendor || '', date: it.date, endDate: null, fromPlace: null, toPlace: null, uaeResidence: false,
       amount: it.amount === '' || it.amount == null ? null : Number(it.amount), currency: (it.currency || '').toUpperCase() || null };
     expenses.push(bill);
     autoTypeFromVendor(bill);
     it.added = true;
   });
   await saveTrips(); await saveExpenses();
+  chosen.forEach(it => { if (it.added && !importAdded.includes(it)) importAdded.push(it); });
+  if (inBatch) return;
   renderAll(); populateCloseYearSelect();
+  renderImportAdded();
   if (!isBatch) renderImportReview();
+}
+
+// ---- the list of what an import added, each with "show" and "remove" ----
+let importAdded = [];
+function showMonthOf(dateStr) {
+  const d = new Date(parseDate(dateStr));
+  calYear = d.getUTCFullYear(); calMonth = d.getUTCMonth();
+  renderCalendar();
+  const cal = document.getElementById('calMonthLabel');
+  if (cal) cal.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+function importItemLabel(it) {
+  const dd = s => s ? new Date(parseDate(s)).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }) : '?';
+  if (it.kind === 'flight') return '\u2708\ufe0f ' + dd(it.depDate) + ' \u00b7 ' + esc(it.flightNo || 'Flight') + ' \u00b7 ' + esc(it.depCity || it.from) + ' (' + esc(it.from) + ') \u2192 ' + esc(it.arrCity || it.to) + ' (' + esc(it.to) + ')' + (it.arrDate && it.arrDate !== it.depDate ? ', arrives ' + dd(it.arrDate) : '');
+  if (it.kind === 'hotel') return '\u{1F3E8} ' + dd(it.checkIn) + ' \u2192 ' + dd(it.checkOut) + ' \u00b7 ' + esc(it.hotel || 'Hotel') + ' \u00b7 ' + esc(it.city ? it.city + ', ' : '') + esc(it.country);
+  return '\u{1F9FE} ' + dd(it.date) + ' \u00b7 ' + esc(it.vendor || 'Bill') + ' \u00b7 ' + esc(it.category) + (it.amount != null && it.amount !== '' ? ' \u00b7 ' + Number(it.amount).toFixed(2) + ' ' + esc(it.currency || '') : '');
+}
+function renderImportAdded() {
+  const el = document.getElementById('pdfImportAdded');
+  if (!el) return;
+  const list = importAdded.filter(it => !it.removed);
+  if (!list.length) { el.innerHTML = ''; return; }
+  const order = { flight: 0, hotel: 1, bill: 2 }, byDate = it => it.depDate || it.checkIn || it.date || '';
+  list.sort((a, b) => byDate(a).localeCompare(byDate(b)) || order[a.kind] - order[b.kind]);
+  el.innerHTML = '<div class="print-note-box" style="margin-top:10px;"><strong>Added in this session (' + list.length + ')</strong> \u2014 tap a date to see it on the calendar.' +
+    list.map(it => '<div style="border-top:1px solid var(--line); padding:6px 0; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">' +
+      '<a href="#" data-imp-show="' + importItems.indexOf(it) + '" style="flex:1; min-width:220px; color:var(--ink);">' + importItemLabel(it) + '</a>' +
+      '<span class="hint">' + esc(it.file || '') + '</span>' +
+      '<button type="button" class="btn-secondary hc-btn" data-imp-remove="' + importItems.indexOf(it) + '">Remove</button></div>').join('') + '</div>';
+  el.querySelectorAll('[data-imp-show]').forEach(a => a.onclick = e => { e.preventDefault(); const it = importItems[+a.dataset.impShow]; showMonthOf(it.depDate || it.checkIn || it.date); });
+  el.querySelectorAll('[data-imp-remove]').forEach(b => b.onclick = async () => { b.disabled = true; await removeImportedItem(importItems[+b.dataset.impRemove]); });
+}
+// takes back exactly what this one item added, nothing else
+async function removeImportedItem(it) {
+  if (!it || !it.added || it.removed) return;
+  await pushUndo();
+  if (it.kind === 'flight') {
+    legs = legs.filter(l => l.id !== it.legId);
+    await saveLegs(); await buildTripsFromLegs();
+  } else {
+    expenses = expenses.filter(e => e.id !== it.billId);
+    if (it.createdTripId && !expenses.some(e => e.tripId === it.createdTripId)) trips = trips.filter(t => t.id !== it.createdTripId);
+    await saveTrips(); await saveExpenses();
+  }
+  it.removed = true; it.added = false; it.discarded = true;
+  renderAll(); populateCloseYearSelect();
+  renderImportAdded();
 }
 document.getElementById('pdfImportInput').addEventListener('change', e => {
   const files = [...e.target.files];
