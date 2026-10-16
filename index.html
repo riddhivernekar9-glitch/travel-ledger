@@ -224,7 +224,7 @@
   <div class="step" id="pdfImportStep">
     <h2>Add bookings from PDFs</h2>
     <p class="hint" style="margin-bottom:10px;">Airline e-tickets and itineraries (Emirates, British Airways, KLM, Lufthansa&hellip;) and hotel confirmations or bills (Hilton, Marriott&hellip;).
-      <b>The files are read on this computer only &mdash; they are never uploaded or stored.</b> Nothing is added until you tick it and click Add, and nothing already in the ledger is changed.</p>
+      <b>The files are read on this computer only &mdash; they are never uploaded or stored.</b> New flights and hotel stays go straight into the calendar; anything already logged (e.g. from a boarding pass) is skipped; only items that clash with the ledger wait for your yes / no. Nothing already in the ledger is changed, and Undo reverses an import.</p>
     <label class="btn-primary" style="display:inline-block; cursor:pointer; padding:8px 14px;">Choose PDF files&hellip;
       <input type="file" id="pdfImportInput" accept="application/pdf,.pdf" multiple style="display:none;"></label>
     <div id="pdfImportStatus" class="hint" style="margin-top:8px;"></div>
@@ -3380,7 +3380,7 @@ async function cleanupLegacyUndoFields() {
 // A tab left open keeps running the old version after an update is uploaded, so new bills can
 // miss newer features (e.g. a type that didn't exist yet). Every few minutes, and whenever the
 // tab comes back into view, compare this page's version with the one that's live.
-const APP_VERSION = '2026-10-16a';
+const APP_VERSION = '2026-10-16b';
 async function checkForNewerVersion() {
   try {
     const res = await fetch(location.href.split('#')[0], { cache: 'no-store' });
@@ -3646,50 +3646,48 @@ function countrySelect(field, i, value) {
   return '<select data-imp-field="' + field + '" data-imp-i="' + i + '" style="max-width:150px;"><option value="">— country —</option>' +
     WORLD_COUNTRIES.map(c => '<option' + (c === value ? ' selected' : '') + '>' + esc(c) + '</option>').join('') + '</select>';
 }
+// Snap, done: everything new is added straight away; anything already in the ledger is skipped;
+// only items that clash with the ledger (or are missing a detail) wait here for a yes / no.
+let lastImportSummary = '';
 function renderImportReview() {
   const el = document.getElementById('pdfImportReview');
-  if (!importItems.length) { el.innerHTML = ''; return; }
-  importItems.forEach(it => {
-    const st = importStatus(it);
-    it._status = st;
-    if (it.checked === undefined) it.checked = st.code === 'new';   // new = ticked; overlaps and duplicates = left for you to decide
-    if (st.code === 'already' || st.code === 'added' || st.code === 'check') it.checked = false;
-  });
-  const colour = { new: 'var(--green)', already: 'var(--ink-soft)', overlap: 'var(--alert)', check: 'var(--amber)', added: 'var(--green)' };
+  const waiting = importItems.filter(it => !it.added && !it.discarded);
+  waiting.forEach(it => { it._status = importStatus(it); });
+  const held = waiting.filter(it => it._status.code === 'overlap' || it._status.code === 'check');
+  if (!held.length) { el.innerHTML = ''; return; }
   const dateIn = (field, i, v) => '<input type="date" data-imp-field="' + field + '" data-imp-i="' + i + '" value="' + esc(v) + '" style="width:auto;">';
   const textIn = (field, i, v, ph, w) => '<input type="text" data-imp-field="' + field + '" data-imp-i="' + i + '" value="' + esc(v) + '" placeholder="' + ph + '" style="width:' + (w || 110) + 'px;">';
-  const rows = importItems.map((it, i) => {
-    const st = it._status;
-    const lock = st.code === 'already' || st.code === 'added';
+  const rows = held.map(it => {
+    const i = importItems.indexOf(it);
     const details = it.kind === 'flight'
       ? '<b>✈ ' + esc(it.flightNo || 'Flight') + '</b> ' + textIn('depCity', i, it.depCity, 'from city') + countrySelect('from', i, it.from) +
         ' → ' + textIn('arrCity', i, it.arrCity, 'to city') + countrySelect('to', i, it.to)
-      : '<b>\u{1F3E8} ' + textIn('hotel', i, it.hotel, 'hotel name', 190) + '</b> ' + textIn('city', i, it.city, 'city') + countrySelect('country', i, it.country) +
-        (it.amount != null ? ' <span class="hint">' + esc(it.amount) + ' ' + esc(it.currency) + '</span>' : '');
+      : '<b>\u{1F3E8} ' + textIn('hotel', i, it.hotel, 'hotel name', 190) + '</b> ' + textIn('city', i, it.city, 'city') + countrySelect('country', i, it.country);
     const dates = it.kind === 'flight'
       ? dateIn('depDate', i, it.depDate) + (it.arrDate && it.arrDate !== it.depDate ? ' <span class="hint">arr.</span> ' + dateIn('arrDate', i, it.arrDate) : '')
       : '<span class="hint">in</span> ' + dateIn('checkIn', i, it.checkIn) + ' <span class="hint">out</span> ' + dateIn('checkOut', i, it.checkOut);
-    return '<tr style="border-top:1px solid var(--line);' + (lock ? ' opacity:0.55;' : '') + '">' +
-      '<td style="padding:6px 4px; vertical-align:top;"><input type="checkbox" data-imp-check="' + i + '"' + (it.checked ? ' checked' : '') + (lock ? ' disabled' : '') + '></td>' +
-      '<td style="padding:6px 4px;">' + details + '<div class="hint">' + dates + ' &middot; from ' + esc(it.file) + '</div></td>' +
-      '<td style="padding:6px 4px; vertical-align:top; color:' + colour[st.code] + '; font-size:12px; max-width:240px;">' + esc(st.text) + '</td></tr>';
+    const canAdd = it._status.code === 'overlap';
+    return '<div style="border-top:1px solid var(--line); padding:8px 0;">' + details +
+      '<div class="hint" style="margin-top:4px;">' + dates + ' &middot; from ' + esc(it.file) + '</div>' +
+      '<div style="color:' + (canAdd ? 'var(--alert)' : 'var(--amber)') + '; font-size:12px; margin-top:4px;">' + esc(it._status.text) + '</div>' +
+      '<div style="margin-top:6px;">' +
+      (canAdd ? '<button type="button" class="btn-primary hc-btn" data-imp-yes="' + i + '">Yes, it’s correct — add it</button>' : '<span class="hint">Fix the details above and it will be added.</span> ') +
+      '<button type="button" class="btn-secondary hc-btn" data-imp-no="' + i + '">No, discard</button></div></div>';
   }).join('');
-  const n = importItems.filter(it => it.checked).length;
-  el.innerHTML = '<table style="width:100%; border-collapse:collapse; font-size:13px; margin-top:10px;">' + rows + '</table>' +
-    '<div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap; align-items:center;">' +
-    '<button type="button" class="btn-primary" id="pdfImportAdd"' + (n ? '' : ' disabled') + '>Add ' + n + ' ticked item' + (n === 1 ? '' : 's') + ' to the ledger</button>' +
-    '<button type="button" class="btn-secondary" id="pdfImportClear">Clear this list</button>' +
-    '<span class="hint">Ticked by default: only items that are new and don’t clash with anything. Overlaps are left unticked for you to decide.</span></div>';
-  el.querySelectorAll('[data-imp-check]').forEach(cb => cb.onchange = () => { importItems[+cb.dataset.impCheck].checked = cb.checked; renderImportReview(); });
-  el.querySelectorAll('[data-imp-field]').forEach(inp => inp.onchange = () => {
+  el.innerHTML = '<div class="print-note-box" style="margin-top:10px; border-color:var(--alert); background:#f5e0ee; color:#631253;">' +
+    '<strong>' + held.length + ' item(s) need your check</strong> — they clash with what’s already in the ledger, so they were <u>not</u> added yet.' + rows + '</div>';
+  el.querySelectorAll('[data-imp-field]').forEach(inp => inp.onchange = async () => {
     const it = importItems[+inp.dataset.impI];
     it[inp.dataset.impField] = inp.value;
     if (it.kind === 'flight' && inp.dataset.impField === 'depDate' && (!it.arrDate || it.arrDate < inp.value)) it.arrDate = inp.value;
-    it.checked = undefined; // re-decide the tick from the new status
+    // once corrected so that it's new and clash-free, it goes straight in like the rest
+    const st = importStatus(it);
+    if (st.code === 'new') { await addImportedItems([it]); return; }
+    if (st.code === 'already') it.discarded = true;
     renderImportReview();
   });
-  document.getElementById('pdfImportClear').onclick = () => { importItems = []; renderImportReview(); document.getElementById('pdfImportStatus').textContent = ''; };
-  document.getElementById('pdfImportAdd').onclick = addImportedItems;
+  el.querySelectorAll('[data-imp-yes]').forEach(b => b.onclick = async () => { b.disabled = true; await addImportedItems([importItems[+b.dataset.impYes]]); });
+  el.querySelectorAll('[data-imp-no]').forEach(b => b.onclick = () => { importItems[+b.dataset.impNo].discarded = true; renderImportReview(); });
 }
 
 async function readPdfFiles(files) {
@@ -3698,8 +3696,7 @@ async function readPdfFiles(files) {
   status.textContent = 'Opening the PDF reader…';
   let lib;
   try { lib = await loadPdfJs(); } catch (e) { status.textContent = e.message; status.style.color = 'var(--red)'; return; }
-  const unread = [];
-  let found = 0;
+  const unread = [], fresh = [];
   for (const f of files) {
     status.textContent = 'Reading ' + f.name + '…';
     try {
@@ -3710,20 +3707,36 @@ async function readPdfFiles(files) {
       items.forEach(it => {
         it.file = f.name;
         const key = it.kind === 'flight' ? it.depDate + it.from + it.to : it.checkIn + it.checkOut + it.country;
-        if (!importItems.some(o => (o.kind === 'flight' ? o.depDate + o.from + o.to : o.checkIn + o.checkOut + o.country) === key)) { importItems.push(it); found++; }
+        if (![...importItems, ...fresh].some(o => (o.kind === 'flight' ? o.depDate + o.from + o.to : o.checkIn + o.checkOut + o.country) === key)) fresh.push(it);
       });
     } catch (e) { unread.push(f.name); }
   }
-  status.innerHTML = 'Found ' + found + ' item(s) in ' + (files.length - unread.length) + ' of ' + files.length + ' file(s). Check them below, then click Add.' +
+  importItems = importItems.concat(fresh);
+  // flights first (a flight can explain a hotel stay abroad), then everything that's new and clash-free
+  fresh.sort((a, b) => (a.kind === 'flight' ? 0 : 1) - (b.kind === 'flight' ? 0 : 1));
+  const already = fresh.filter(it => importStatus(it).code === 'already');
+  already.forEach(it => { it.discarded = true; });
+  const toAdd = [];
+  fresh.forEach(it => { if (!it.discarded && importStatus(it).code === 'new') toAdd.push(it); });
+  if (toAdd.length) await addImportedItems(toAdd, true);
+  const fl = toAdd.filter(i => i.kind === 'flight').length, ho = toAdd.length - fl;
+  const held = fresh.filter(it => !it.added && !it.discarded).length;
+  lastImportSummary = '<span style="color:var(--green);">✓ Added ' + fl + ' flight(s) and ' + ho + ' hotel stay(s) to the calendar.</span>' +
+    (already.length ? ' Skipped ' + already.length + ' already in the ledger.' : '') +
+    (held ? ' <b>' + held + ' need your check below.</b>' : '') +
+    (toAdd.length ? ' <button type="button" class="btn-secondary hc-btn" id="pdfImportUndo">Undo this import</button>' : '') +
     (unread.length ? '<br><span style="color:var(--amber);">No flight or hotel dates could be read in: ' + unread.map(esc).join(', ') +
       '. A scanned or photographed document has no readable text — add those by hand.</span>' : '');
+  status.innerHTML = lastImportSummary;
+  const u = document.getElementById('pdfImportUndo');
+  if (u) u.onclick = async () => { await performUndo(); status.innerHTML = 'Import undone.'; importItems = importItems.filter(it => !toAdd.includes(it)); renderImportReview(); };
   renderImportReview();
 }
 
-async function addImportedItems() {
-  const chosen = importItems.filter(it => it.checked && !it.added);
+// adds the given items (flights become boarding-pass entries; hotel stays join or start a trip)
+async function addImportedItems(chosen, isBatch) {
+  chosen = chosen.filter(it => !it.added);
   if (!chosen.length) return;
-  const btn = document.getElementById('pdfImportAdd'); btn.disabled = true; btn.textContent = 'Adding…';
   await pushUndo();
   const flights = chosen.filter(it => it.kind === 'flight'), hotels = chosen.filter(it => it.kind === 'hotel');
   flights.forEach(it => {
@@ -3733,7 +3746,6 @@ async function addImportedItems() {
   if (flights.length) { await saveLegs(); await buildTripsFromLegs(); }
   hotels.forEach(it => {
     const cin = parseDate(it.checkIn), lastNight = Math.max(cin, parseDate(it.checkOut) - DAYMS);
-    // join a trip already in that country on (or right next to) these nights; otherwise start one
     let trip = trips.find(t => !t.derived && t.country === it.country && overlapDays(t.entry, t.exit, cin - DAYMS, lastNight + DAYMS) > 0) ||
                trips.find(t => t.country === it.country && overlapDays(t.entry, t.exit, cin - DAYMS, lastNight + DAYMS) > 0);
     if (!trip) {
@@ -3748,9 +3760,7 @@ async function addImportedItems() {
   });
   await saveTrips(); await saveExpenses();
   renderAll(); populateCloseYearSelect();
-  document.getElementById('pdfImportStatus').innerHTML = '<span style="color:var(--green);">✓ Added ' + flights.length + ' flight(s) and ' + hotels.length +
-    ' hotel stay(s). Undo reverses this. The health check above the calendar will flag anything that now clashes.</span>';
-  renderImportReview();
+  if (!isBatch) renderImportReview();
 }
 document.getElementById('pdfImportInput').addEventListener('change', e => {
   const files = [...e.target.files].filter(f => /\.pdf$/i.test(f.name) || f.type === 'application/pdf');
