@@ -3380,7 +3380,7 @@ async function cleanupLegacyUndoFields() {
 // A tab left open keeps running the old version after an update is uploaded, so new bills can
 // miss newer features (e.g. a type that didn't exist yet). Every few minutes, and whenever the
 // tab comes back into view, compare this page's version with the one that's live.
-const APP_VERSION = '2026-10-16b';
+const APP_VERSION = '2026-10-16d';
 async function checkForNewerVersion() {
   try {
     const res = await fetch(location.href.split('#')[0], { cache: 'no-store' });
@@ -3484,7 +3484,12 @@ function parseFlights(lines) {
   // The date and airports can sit up to two lines above the flight number ("Wed 13 Aug 2025",
   // "Amsterdam (AMS) -> Aruba (AUA)", "KL 0763 ..."), so each segment starts there.
   const useful = l => airportsIn(l).length > 0 || findDates(l).length > 0;
+  // Which side the details sit on is decided once per document, from the first flight: if nothing
+  // useful sits just above it, details follow the flight number ("EK 0005 DXB -> LGW / Departure: 12 May")
+  // and no segment may reach upwards into the previous flight's lines.
+  const looksBack = starts.length > 0 && starts[0] > 0 && useful(lines[starts[0] - 1]);
   const segStart = starts.map((s, k) => {
+    if (!looksBack) return s;
     const floor = k > 0 ? starts[k - 1] + 1 : 0;
     let b = s;
     while (b - 1 >= floor && s - (b - 1) <= 2 && useful(lines[b - 1])) b--;
@@ -3605,6 +3610,54 @@ function loadPdfJs() {
   return tryOne(0);
 }
 
+// ---- reading PDFs that are pictures (scans, photos, screenshots saved as PDF) ----
+// Text recognition runs inside this browser: the page images never leave the computer.
+// Only the recognition program and its English dictionary are downloaded (once, ~10 MB, then cached).
+const OCR_VERSION = '5.1.1';
+function loadOcr() {
+  if (window.Tesseract) return Promise.resolve(window.Tesseract);
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@' + OCR_VERSION + '/dist/tesseract.min.js';
+    s.onload = () => resolve(window.Tesseract);
+    s.onerror = () => { s.remove(); reject(new Error('Could not load the text-recognition reader. Check your internet connection and try again.')); };
+    document.head.appendChild(s);
+  });
+}
+let ocrWorker = null;
+async function getOcrWorker(onProgress) {
+  if (ocrWorker) return ocrWorker;
+  const T = await loadOcr();
+  ocrWorker = await T.createWorker('eng', 1, {
+    workerPath: 'https://cdn.jsdelivr.net/npm/tesseract.js@' + OCR_VERSION + '/dist/worker.min.js',
+    corePath: 'https://cdn.jsdelivr.net/npm/tesseract.js-core@' + OCR_VERSION,
+    langPath: 'https://cdn.jsdelivr.net/npm/@tesseract.js-data/eng/4.0.0_best_int',
+    logger: m => { if (onProgress && m && m.status) onProgress(m); }
+  });
+  return ocrWorker;
+}
+async function ocrPdfToLines(pdf, onProgress) {
+  const worker = await getOcrWorker(onProgress);
+  const lines = [];
+  const pages = Math.min(pdf.numPages, 10);
+  for (let p = 1; p <= pages; p++) {
+    if (onProgress) onProgress({ status: 'page', page: p, pages });
+    const page = await pdf.getPage(p);
+    const base = page.getViewport({ scale: 1 });
+    const scale = Math.min(3, Math.max(1.5, 2400 / Math.max(base.width, base.height)));
+    const vp = page.getViewport({ scale });
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.ceil(vp.width); canvas.height = Math.ceil(vp.height);
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    await page.render({ canvasContext: ctx, viewport: vp }).promise;
+    const { data } = await worker.recognize(canvas);
+    (data.text || '').split('\n').map(l => l.replace(/\s+/g, ' ').trim()).filter(Boolean).forEach(l => lines.push(l));
+    canvas.width = canvas.height = 0;
+  }
+  return lines;
+}
+
 // ---- the review table ----
 let importItems = [];   // everything found in the PDFs so far, waiting for approval
 const esc = v => String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
@@ -3701,15 +3754,36 @@ async function readPdfFiles(files) {
     status.textContent = 'Reading ' + f.name + '…';
     try {
       const pdf = await lib.getDocument({ data: new Uint8Array(await f.arrayBuffer()) }).promise;
-      const r = parseBookingText(await pdfToLines(pdf), WORLD_COUNTRIES);
+      let lines = await pdfToLines(pdf), viaOcr = false;
+      if (lines.join('').replace(/\s/g, '').length < 20) {
+        // no text layer: it's a picture, so read the words off the page image (on this computer)
+        status.textContent = 'Reading ' + f.name + ' — it\u2019s a picture, recognising the text on this computer…';
+        try {
+          lines = await ocrPdfToLines(pdf, m => {
+            if (m.status === 'page') status.textContent = 'Reading ' + f.name + ' (picture) — page ' + m.page + ' of ' + m.pages + '…';
+            else if (/loading/.test(m.status) && m.progress != null) status.textContent = 'Preparing text recognition (first time only)… ' + Math.round(m.progress * 100) + '%';
+          });
+          viaOcr = true;
+        } catch (e) { unread.push({ name: f.name, error: e && e.message || 'text recognition failed', picture: true }); continue; }
+      }
+      const r = parseBookingText(lines, WORLD_COUNTRIES);
       const items = r.flights.concat(r.hotels);
-      if (!items.length) { unread.push(f.name); continue; }
+      if (!items.length) {
+        // what the reader could see, so the reason is clear (all of this stays on this screen)
+        const text = lines.join('\n');
+        unread.push({ name: f.name, pages: pdf.numPages, chars: text.replace(/\s/g, '').length, text, viaOcr,
+          dates: findDates(text).length, airports: lines.reduce((n, l) => n + airportsIn(l).length, 0),
+          flightNos: lines.filter(l => FLIGHT_NO.test(l)).length,
+          inOut: /check[\s-]?in|arrival/i.test(text) && /check[\s-]?out|departure/i.test(text) });
+        continue;
+      }
       items.forEach(it => {
         it.file = f.name;
+        if (viaOcr) it.viaOcr = true;
         const key = it.kind === 'flight' ? it.depDate + it.from + it.to : it.checkIn + it.checkOut + it.country;
         if (![...importItems, ...fresh].some(o => (o.kind === 'flight' ? o.depDate + o.from + o.to : o.checkIn + o.checkOut + o.country) === key)) fresh.push(it);
       });
-    } catch (e) { unread.push(f.name); }
+    } catch (e) { unread.push({ name: f.name, error: e && e.message || 'could not be opened' }); }
   }
   importItems = importItems.concat(fresh);
   // flights first (a flight can explain a hotel stay abroad), then everything that's new and clash-free
@@ -3721,13 +3795,27 @@ async function readPdfFiles(files) {
   if (toAdd.length) await addImportedItems(toAdd, true);
   const fl = toAdd.filter(i => i.kind === 'flight').length, ho = toAdd.length - fl;
   const held = fresh.filter(it => !it.added && !it.discarded).length;
-  lastImportSummary = '<span style="color:var(--green);">✓ Added ' + fl + ' flight(s) and ' + ho + ' hotel stay(s) to the calendar.</span>' +
+  lastImportSummary = (toAdd.length || !unread.length ? '<span style="color:var(--green);">✓ Added ' + fl + ' flight(s) and ' + ho + ' hotel stay(s) to the calendar.</span>' : '') +
     (already.length ? ' Skipped ' + already.length + ' already in the ledger.' : '') +
     (held ? ' <b>' + held + ' need your check below.</b>' : '') +
     (toAdd.length ? ' <button type="button" class="btn-secondary hc-btn" id="pdfImportUndo">Undo this import</button>' : '') +
-    (unread.length ? '<br><span style="color:var(--amber);">No flight or hotel dates could be read in: ' + unread.map(esc).join(', ') +
-      '. A scanned or photographed document has no readable text — add those by hand.</span>' : '');
+    (unread.length ? '<div style="margin-top:8px; color:var(--amber);">' + unread.map((u, k) => {
+      let why;
+      if (u.error && u.picture) why = 'is a <b>picture</b>, and the text recogniser couldn\u2019t run (' + esc(u.error) + ').';
+      else if (u.error) why = 'couldn\u2019t be opened (' + esc(u.error) + '). It may be password-protected or damaged.';
+      else if (u.chars < 20) why = 'is a <b>picture</b> and no words could be recognised on it (it may be too blurry or small). Add it by hand.';
+      else why = (u.viaOcr ? 'is a <b>picture</b>; text was recognised (' : 'has text (') + u.chars.toLocaleString() + ' characters on ' + u.pages + ' page' + (u.pages === 1 ? '' : 's') + '), but no trip was recognised in it. ' +
+        'Found: ' + u.dates + ' date(s), ' + u.airports + ' airport code(s), ' + u.flightNos + ' flight number(s)' + (u.inOut ? ', check-in/out words' : '') + '. ' +
+        '<a href="#" data-unread-show="' + k + '">Show the text the reader sees</a> (only on this screen).' +
+        '<pre data-unread-text="' + k + '" style="display:none; white-space:pre-wrap; max-height:260px; overflow:auto; background:var(--paper); border:1px solid var(--line); padding:8px; font-size:11px; color:var(--ink);">' + esc(u.text) + '</pre>';
+      return '\u2022 <b>' + esc(u.name) + '</b> ' + why;
+    }).join('<br>') + '</div>' : '');
   status.innerHTML = lastImportSummary;
+  status.querySelectorAll('[data-unread-show]').forEach(a => a.onclick = e => {
+    e.preventDefault();
+    const pre = status.querySelector('[data-unread-text="' + a.dataset.unreadShow + '"]');
+    pre.style.display = pre.style.display === 'none' ? 'block' : 'none';
+  });
   const u = document.getElementById('pdfImportUndo');
   if (u) u.onclick = async () => { await performUndo(); status.innerHTML = 'Import undone.'; importItems = importItems.filter(it => !toAdd.includes(it)); renderImportReview(); };
   renderImportReview();
