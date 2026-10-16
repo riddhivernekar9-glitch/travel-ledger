@@ -222,11 +222,11 @@
   </div>
 
   <div class="step" id="pdfImportStep">
-    <h2>Add bookings from PDFs</h2>
-    <p class="hint" style="margin-bottom:10px;">Airline e-tickets and itineraries (Emirates, British Airways, KLM, Lufthansa&hellip;) and hotel confirmations or bills (Hilton, Marriott&hellip;).
-      <b>The files are read on this computer only &mdash; they are never uploaded or stored.</b> New flights and hotel stays go straight into the calendar; anything already logged (e.g. from a boarding pass) is skipped; only items that clash with the ledger wait for your yes / no. Nothing already in the ledger is changed, and Undo reverses an import.</p>
-    <label class="btn-primary" style="display:inline-block; cursor:pointer; padding:8px 14px;">Choose PDF files&hellip;
-      <input type="file" id="pdfImportInput" accept="application/pdf,.pdf" multiple style="display:none;"></label>
+    <h2>Add bookings from PDFs or photos</h2>
+    <p class="hint" style="margin-bottom:10px;">Airline e-tickets and itineraries (Emirates, British Airways, KLM, Lufthansa&hellip;) hotel confirmations or bills (Hilton, Marriott&hellip;), and photos of boarding passes. On a phone you can take the photo straight from the camera.
+      <b>The files are read on this device only &mdash; they are never uploaded or stored.</b> New flights and hotel stays go straight into the calendar; anything already logged (e.g. from a boarding pass) is skipped; only items that clash with the ledger wait for your yes / no. Nothing already in the ledger is changed, and Undo reverses an import.</p>
+    <label class="btn-primary" style="display:inline-block; cursor:pointer; padding:8px 14px;">Choose PDFs or photos&hellip;
+      <input type="file" id="pdfImportInput" accept="application/pdf,.pdf,image/*" multiple style="display:none;"></label>
     <div id="pdfImportStatus" class="hint" style="margin-top:8px;"></div>
     <div id="pdfImportReview"></div>
   </div>
@@ -3380,7 +3380,7 @@ async function cleanupLegacyUndoFields() {
 // A tab left open keeps running the old version after an update is uploaded, so new bills can
 // miss newer features (e.g. a type that didn't exist yet). Every few minutes, and whenever the
 // tab comes back into view, compare this page's version with the one that's live.
-const APP_VERSION = '2026-10-16d';
+const APP_VERSION = '2026-10-16e';
 async function checkForNewerVersion() {
   try {
     const res = await fetch(location.href.split('#')[0], { cache: 'no-store' });
@@ -3464,10 +3464,16 @@ function findDates(text) {
 
 // three-letter airport codes in a line: "(DXB)" anywhere, or bare "DXB" on a line that has a flight number
 const FLIGHT_NO = /\b(EK|EY|QR|BA|VS|KL|AF|LH|LX|OS|AZ|IB|TP|SN|SK|AY|EI|TK|A3|OA|CY|FZ|G9|WY|GF|SV|MS|RJ|ME|KQ|ET|SA|QF|SQ|CX|NH|JL|KE|OZ|MH|TG|GA|PR|5J|VN|AI|UK|UL|AA|UA|DL|B6|AS|WN|AC|AM|CM|LA|AV|U2|FR|W6|VY|EW|DE|LS|BY|TOM|HV|DY|D8)\s?0*\d{1,4}\b/;
-function airportsIn(line) {
+// 3-letter codes that are also ordinary words or abbreviations, only trusted in brackets or next to a flight number
+const CODE_WORDS = new Set(['MAN', 'LOS', 'ADD', 'DEL', 'SAN', 'SEA', 'PER', 'INN', 'MAD', 'LAS', 'GOA', 'BOS', 'STR', 'FAO', 'DUB', 'HAM', 'BER', 'NAS', 'MEL', 'CAG', 'LIN', 'OLB', 'TPA', 'ORD', 'SIN', 'CAI', 'PER', 'LIS', 'AMS', 'DEN', 'ATH', 'BAH', 'MIA', 'KIX']);
+function airportsIn(line, loose) {
   const out = [];
   let m; const re = /\(([A-Z]{3})\)/g;
   while ((m = re.exec(line))) if (AIRPORTS[m[1]]) out.push({ code: m[1], index: m.index });
+  if (loose && !FLIGHT_NO.test(line)) {
+    const re3 = /(?:^|[\s,>\-–→])([A-Z]{3})(?=$|[\s,<\-–→])/g;
+    while ((m = re3.exec(line))) if (AIRPORTS[m[1]] && !CODE_WORDS.has(m[1]) && !out.some(o => Math.abs(o.index - m.index) < 4)) out.push({ code: m[1], index: m.index });
+  }
   if (FLIGHT_NO.test(line)) {
     const re2 = /\b([A-Z]{3})\b/g;
     while ((m = re2.exec(line))) if (AIRPORTS[m[1]] && !out.some(o => Math.abs(o.index - m.index) < 3)) out.push({ code: m[1], index: m.index });
@@ -3475,6 +3481,19 @@ function airportsIn(line) {
   return out.sort((a, b) => a.index - b.index);
 }
 
+// "15MAR" / "15 Mar" with no year (boarding passes): the most recent such date, up to two months ahead
+function yearlessDates(text) {
+  const out = [];
+  const re = /\b(\d{1,2})\s?(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b(?![\s\-\.,]*\d)/gi;
+  const now = new Date(), limit = Date.now() + 60 * 86400000;
+  let m;
+  while ((m = re.exec(text))) {
+    let y = now.getFullYear(), d = okDate(y, MONTHS[m[2].toLowerCase()], +m[1]);
+    if (d && Date.parse(d) > limit) d = okDate(y - 1, MONTHS[m[2].toLowerCase()], +m[1]);
+    if (d) out.push({ date: d, index: m.index, yearGuessed: true });
+  }
+  return out;
+}
 function parseFlights(lines) {
   const flights = [];
   const seen = new Set();
@@ -3483,7 +3502,7 @@ function parseFlights(lines) {
   const starts = lines.map((l, i) => FLIGHT_NO.test(l) ? i : -1).filter(i => i >= 0);
   // The date and airports can sit up to two lines above the flight number ("Wed 13 Aug 2025",
   // "Amsterdam (AMS) -> Aruba (AUA)", "KL 0763 ..."), so each segment starts there.
-  const useful = l => airportsIn(l).length > 0 || findDates(l).length > 0;
+  const useful = l => airportsIn(l, true).length > 0 || findDates(l).length > 0 || yearlessDates(l).length > 0;
   // Which side the details sit on is decided once per document, from the first flight: if nothing
   // useful sits just above it, details follow the flight number ("EK 0005 DXB -> LGW / Departure: 12 May")
   // and no segment may reach upwards into the previous flight's lines.
@@ -3500,10 +3519,24 @@ function parseFlights(lines) {
     : lines.map((l, i) => lines.slice(i, i + 3));
   blocks.forEach(block => {
     const text = block.join('  ');
-    const codes = [];
-    block.forEach(l => airportsIn(l).forEach(a => { if (codes[codes.length - 1] !== a.code) codes.push(a.code); }));
+    let codes = [];
+    const collect = loose => { codes = []; block.forEach(l => airportsIn(l, loose).forEach(a => { if (codes[codes.length - 1] !== a.code) codes.push(a.code); })); };
+    collect(false);
+    if (starts.length && (codes.length < 2 || codes[0] === codes[1])) collect(true);
+    if (starts.length && (codes.length < 2 || codes[0] === codes[1])) {
+      // no codes at all: city names ("Dubai ... London Heathrow"), in the order they appear
+      codes = [];
+      const hits = [];
+      Object.entries(AIRPORTS).forEach(([code, [city]]) => {
+        const i = text.search(new RegExp('\\b' + city.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'i'));
+        if (i >= 0 && !hits.some(h => h.city === city)) hits.push({ code, city, i });
+      });
+      hits.sort((a, b) => a.i - b.i).forEach(h => { if (codes[codes.length - 1] !== h.code) codes.push(h.code); });
+    }
     if (codes.length < 2 || codes[0] === codes[1]) return;
-    const dates = findDates(text);
+    let dates = findDates(text);
+    let yearGuessed = false;
+    if (!dates.length && starts.length) { dates = yearlessDates(text); yearGuessed = dates.length > 0; }
     if (!dates.length) return;
     const dep = dates[0].date;
     let arr = dep;
@@ -3515,7 +3548,7 @@ function parseFlights(lines) {
     seen.add(key);
     const [fromCity, fromCountry] = AIRPORTS[codes[0]], [toCity, toCountry] = AIRPORTS[codes[1]];
     const fno = (text.match(FLIGHT_NO) || [''])[0].replace(/\s+/g, '');
-    flights.push({ kind: 'flight', depDate: dep, arrDate: arr, from: fromCountry, depCity: fromCity, to: toCountry, arrCity: toCity, fromCode: codes[0], toCode: codes[1], flightNo: fno });
+    flights.push({ kind: 'flight', depDate: dep, arrDate: arr, from: fromCountry, depCity: fromCity, to: toCountry, arrCity: toCity, fromCode: codes[0], toCode: codes[1], flightNo: fno, yearGuessed });
   });
   return flights;
 }
@@ -3569,8 +3602,9 @@ function parseHotels(lines, knownCountries) {
 // lines of text from one PDF -> { flights, hotels }
 function parseBookingText(lines, knownCountries) {
   const clean = lines.map(l => l.replace(/\s+/g, ' ').trim()).filter(Boolean);
-  const hotels = parseHotels(clean, knownCountries);
   const flights = parseFlights(clean);
+  let hotels = parseHotels(clean, knownCountries);
+  if (flights.length && !/check[\s-]?in/i.test(clean.join(' '))) hotels = [];
   return { flights, hotels };
 }
 // pdf.js page -> lines, by grouping text pieces that sit on the same height, left to right
@@ -3585,9 +3619,19 @@ async function pdfToLines(pdf) {
       const y = it.transform[5], x = it.transform[4];
       let row = rows.find(r => Math.abs(r.y - y) < 3);
       if (!row) { row = { y, parts: [] }; rows.push(row); }
-      row.parts.push({ x, s: it.str });
+      row.parts.push({ x, w: it.width || 0, h: Math.abs(it.transform[0]) || 8, s: it.str });
     });
-    rows.sort((a, b) => b.y - a.y).forEach(r => lines.push(r.parts.sort((a, b) => a.x - b.x).map(p => p.s).join(' ')));
+    rows.sort((a, b) => b.y - a.y).forEach(r => {
+      const parts = r.parts.sort((a, b) => a.x - b.x);
+      let line = '';
+      parts.forEach((p, k) => {
+        if (k === 0) { line = p.s; return; }
+        const prev = parts[k - 1], gap = p.x - (prev.x + prev.w);
+        const touching = prev.w > 0 && gap < Math.max(0.6, prev.h * 0.12) && !/\s$/.test(line) && !/^\s/.test(p.s);
+        line += (touching ? '' : ' ') + p.s;
+      });
+      lines.push(line);
+    });
   }
   return lines;
 }
@@ -3636,6 +3680,11 @@ async function getOcrWorker(onProgress) {
   });
   return ocrWorker;
 }
+async function ocrImageToLines(file, onProgress) {
+  const worker = await getOcrWorker(onProgress);
+  const { data } = await worker.recognize(file);
+  return (data.text || '').split('\n').map(l => l.replace(/\s+/g, ' ').trim()).filter(Boolean);
+}
 async function ocrPdfToLines(pdf, onProgress) {
   const worker = await getOcrWorker(onProgress);
   const lines = [];
@@ -3676,6 +3725,7 @@ function importStatus(it) {
       trips.filter(t => t.country !== it.from && t.country !== it.to && overlapDays(t.entry, t.exit, d, d) > 0).forEach(t => clash.set(t.id, t));
     });
     if (clash.size) return { code: 'overlap', text: 'Overlaps: the ledger has him in ' + [...clash.values()].map(t => tripPlaceLabel(t) + ' ' + t.entry + ' \u2192 ' + t.exit).join('; ') + ' that day' };
+    if (it.yearGuessed) return { code: 'confirm', text: 'A boarding pass doesn\u2019t print the year \u2014 it was taken as ' + it.depDate.slice(0, 4) + '. Check the date, then add it.' };
     return { code: 'new', text: 'New' };
   }
   if (!it.checkIn || !it.checkOut || !it.country) return { code: 'check', text: it.country ? 'Fill in the dates' : 'Pick the country' };
@@ -3706,7 +3756,7 @@ function renderImportReview() {
   const el = document.getElementById('pdfImportReview');
   const waiting = importItems.filter(it => !it.added && !it.discarded);
   waiting.forEach(it => { it._status = importStatus(it); });
-  const held = waiting.filter(it => it._status.code === 'overlap' || it._status.code === 'check');
+  const held = waiting.filter(it => it._status.code === 'overlap' || it._status.code === 'check' || it._status.code === 'confirm');
   if (!held.length) { el.innerHTML = ''; return; }
   const dateIn = (field, i, v) => '<input type="date" data-imp-field="' + field + '" data-imp-i="' + i + '" value="' + esc(v) + '" style="width:auto;">';
   const textIn = (field, i, v, ph, w) => '<input type="text" data-imp-field="' + field + '" data-imp-i="' + i + '" value="' + esc(v) + '" placeholder="' + ph + '" style="width:' + (w || 110) + 'px;">';
@@ -3719,7 +3769,7 @@ function renderImportReview() {
     const dates = it.kind === 'flight'
       ? dateIn('depDate', i, it.depDate) + (it.arrDate && it.arrDate !== it.depDate ? ' <span class="hint">arr.</span> ' + dateIn('arrDate', i, it.arrDate) : '')
       : '<span class="hint">in</span> ' + dateIn('checkIn', i, it.checkIn) + ' <span class="hint">out</span> ' + dateIn('checkOut', i, it.checkOut);
-    const canAdd = it._status.code === 'overlap';
+    const canAdd = it._status.code === 'overlap' || it._status.code === 'confirm';
     return '<div style="border-top:1px solid var(--line); padding:8px 0;">' + details +
       '<div class="hint" style="margin-top:4px;">' + dates + ' &middot; from ' + esc(it.file) + '</div>' +
       '<div style="color:' + (canAdd ? 'var(--alert)' : 'var(--amber)') + '; font-size:12px; margin-top:4px;">' + esc(it._status.text) + '</div>' +
@@ -3728,11 +3778,12 @@ function renderImportReview() {
       '<button type="button" class="btn-secondary hc-btn" data-imp-no="' + i + '">No, discard</button></div></div>';
   }).join('');
   el.innerHTML = '<div class="print-note-box" style="margin-top:10px; border-color:var(--alert); background:#f5e0ee; color:#631253;">' +
-    '<strong>' + held.length + ' item(s) need your check</strong> — they clash with what’s already in the ledger, so they were <u>not</u> added yet.' + rows + '</div>';
+    '<strong>' + held.length + ' item(s) need your check</strong> — they clash with what’s already in the ledger or a detail is uncertain, so they were <u>not</u> added yet.' + rows + '</div>';
   el.querySelectorAll('[data-imp-field]').forEach(inp => inp.onchange = async () => {
     const it = importItems[+inp.dataset.impI];
     it[inp.dataset.impField] = inp.value;
     if (it.kind === 'flight' && inp.dataset.impField === 'depDate' && (!it.arrDate || it.arrDate < inp.value)) it.arrDate = inp.value;
+    if (/Date$/.test(inp.dataset.impField)) it.yearGuessed = false;
     // once corrected so that it's new and clash-free, it goes straight in like the rest
     const st = importStatus(it);
     if (st.code === 'new') { await addImportedItems([it]); return; }
@@ -3748,10 +3799,34 @@ async function readPdfFiles(files) {
   status.style.color = 'var(--ink-soft)';
   status.textContent = 'Opening the PDF reader…';
   let lib;
-  try { lib = await loadPdfJs(); } catch (e) { status.textContent = e.message; status.style.color = 'var(--red)'; return; }
+  const isPdf = f => /\.pdf$/i.test(f.name) || f.type === 'application/pdf';
+  if (files.some(isPdf)) {
+    try { lib = await loadPdfJs(); } catch (e) { status.textContent = e.message; status.style.color = 'var(--red)'; return; }
+  }
+  const progress = name => m => {
+    if (m.status === 'page') status.textContent = 'Reading ' + name + ' — page ' + m.page + ' of ' + m.pages + '…';
+    else if (/loading/.test(m.status) && m.progress != null) status.textContent = 'Preparing text recognition (first time only)… ' + Math.round(m.progress * 100) + '%';
+    else if (/recogni/.test(m.status) && m.progress != null) status.textContent = 'Reading ' + name + '… ' + Math.round(m.progress * 100) + '%';
+  };
   const unread = [], fresh = [];
   for (const f of files) {
     status.textContent = 'Reading ' + f.name + '…';
+    if (!isPdf(f)) {
+      // a photo (e.g. a boarding pass taken with the phone camera): recognise its text on this device
+      try {
+        const lines = await ocrImageToLines(f, progress(f.name));
+        const r = parseBookingText(lines, WORLD_COUNTRIES), items = r.flights.concat(r.hotels);
+        if (!items.length) {
+          const text = lines.join('\n');
+          unread.push({ name: f.name, pages: 1, chars: text.replace(/\s/g, '').length, text, viaOcr: true, photo: true,
+            dates: findDates(text).length, airports: lines.reduce((n, l) => n + airportsIn(l, true).length, 0), flightNos: lines.filter(l => FLIGHT_NO.test(l)).length,
+            inOut: /check[\s-]?in|arrival/i.test(text) && /check[\s-]?out|departure/i.test(text) });
+          continue;
+        }
+        items.forEach(it => { it.file = f.name; it.viaOcr = true; if (!fresh.some(o => o.kind === it.kind && (o.depDate || o.checkIn) === (it.depDate || it.checkIn) && (o.from || o.country) === (it.from || it.country))) fresh.push(it); });
+      } catch (e) { unread.push({ name: f.name, error: e && e.message || 'text recognition failed', picture: true }); }
+      continue;
+    }
     try {
       const pdf = await lib.getDocument({ data: new Uint8Array(await f.arrayBuffer()) }).promise;
       let lines = await pdfToLines(pdf), viaOcr = false;
@@ -3766,8 +3841,17 @@ async function readPdfFiles(files) {
           viaOcr = true;
         } catch (e) { unread.push({ name: f.name, error: e && e.message || 'text recognition failed', picture: true }); continue; }
       }
-      const r = parseBookingText(lines, WORLD_COUNTRIES);
-      const items = r.flights.concat(r.hotels);
+      let r = parseBookingText(lines, WORLD_COUNTRIES);
+      let items = r.flights.concat(r.hotels);
+      if (!items.length && !viaOcr) {
+        // some PDFs carry text that can't be used (scrambled fonts, text drawn as shapes): read the page image instead
+        try {
+          status.textContent = 'Reading ' + f.name + ' a second way (recognising the page image on this device)…';
+          const ocrLines = await ocrPdfToLines(pdf, progress(f.name));
+          const r2 = parseBookingText(ocrLines, WORLD_COUNTRIES);
+          if (r2.flights.length + r2.hotels.length) { r = r2; items = r2.flights.concat(r2.hotels); viaOcr = true; }
+        } catch (e) { /* keep the first reading's explanation */ }
+      }
       if (!items.length) {
         // what the reader could see, so the reason is clear (all of this stays on this screen)
         const text = lines.join('\n');
@@ -3795,7 +3879,7 @@ async function readPdfFiles(files) {
   if (toAdd.length) await addImportedItems(toAdd, true);
   const fl = toAdd.filter(i => i.kind === 'flight').length, ho = toAdd.length - fl;
   const held = fresh.filter(it => !it.added && !it.discarded).length;
-  lastImportSummary = (toAdd.length || !unread.length ? '<span style="color:var(--green);">✓ Added ' + fl + ' flight(s) and ' + ho + ' hotel stay(s) to the calendar.</span>' : '') +
+  lastImportSummary = (toAdd.length ? '<span style="color:var(--green);">✓ Added ' + fl + ' flight(s) and ' + ho + ' hotel stay(s) to the calendar.</span>' : (!unread.length && !held && !already.length ? 'Nothing new found.' : '')) +
     (already.length ? ' Skipped ' + already.length + ' already in the ledger.' : '') +
     (held ? ' <b>' + held + ' need your check below.</b>' : '') +
     (toAdd.length ? ' <button type="button" class="btn-secondary hc-btn" id="pdfImportUndo">Undo this import</button>' : '') +
@@ -3804,7 +3888,7 @@ async function readPdfFiles(files) {
       if (u.error && u.picture) why = 'is a <b>picture</b>, and the text recogniser couldn\u2019t run (' + esc(u.error) + ').';
       else if (u.error) why = 'couldn\u2019t be opened (' + esc(u.error) + '). It may be password-protected or damaged.';
       else if (u.chars < 20) why = 'is a <b>picture</b> and no words could be recognised on it (it may be too blurry or small). Add it by hand.';
-      else why = (u.viaOcr ? 'is a <b>picture</b>; text was recognised (' : 'has text (') + u.chars.toLocaleString() + ' characters on ' + u.pages + ' page' + (u.pages === 1 ? '' : 's') + '), but no trip was recognised in it. ' +
+      else why = (u.photo ? 'is a photo; text was recognised (' : u.viaOcr ? 'is a <b>picture</b>; text was recognised (' : 'has text (') + u.chars.toLocaleString() + ' characters on ' + u.pages + ' page' + (u.pages === 1 ? '' : 's') + '), but no trip was recognised in it. ' +
         'Found: ' + u.dates + ' date(s), ' + u.airports + ' airport code(s), ' + u.flightNos + ' flight number(s)' + (u.inOut ? ', check-in/out words' : '') + '. ' +
         '<a href="#" data-unread-show="' + k + '">Show the text the reader sees</a> (only on this screen).' +
         '<pre data-unread-text="' + k + '" style="display:none; white-space:pre-wrap; max-height:260px; overflow:auto; background:var(--paper); border:1px solid var(--line); padding:8px; font-size:11px; color:var(--ink);">' + esc(u.text) + '</pre>';
@@ -3851,7 +3935,7 @@ async function addImportedItems(chosen, isBatch) {
   if (!isBatch) renderImportReview();
 }
 document.getElementById('pdfImportInput').addEventListener('change', e => {
-  const files = [...e.target.files].filter(f => /\.pdf$/i.test(f.name) || f.type === 'application/pdf');
+  const files = [...e.target.files].filter(f => /\.(pdf|jpe?g|png|heic|heif|webp)$/i.test(f.name) || f.type === 'application/pdf' || /^image\//.test(f.type));
   if (files.length) readPdfFiles(files);
   e.target.value = ''; // so the same file can be chosen again
 });
