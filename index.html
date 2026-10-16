@@ -55,6 +55,17 @@
   .stub .bar-track { height: 6px; background: #eee6d6; border-radius: 3px; overflow: hidden; margin-bottom: 8px; }
   .stub .bar-fill { height: 100%; border-radius: 3px; }
   .stub .status { font-family: "Courier New", monospace; font-size: 11px; padding: 3px 7px; border-radius: 2px; display: inline-block; }
+  @media (max-width: 700px) { table.ledger { display: block; overflow-x: auto; max-width: 100%; } }
+  .stub-lines { margin-top: 8px; font-family: "Courier New", monospace; font-size: 11px; line-height: 1.5; }
+  .stub-lines .lim-hit { color: var(--red); font-weight: bold; }
+  .stub-lines .lim-ok { color: var(--green); font-weight: bold; }
+  .stub-hist { margin-top: 8px; font-family: "Courier New", monospace; font-size: 11px; }
+  .stub-hist summary { cursor: pointer; color: var(--ink); }
+  .hist-row { display: grid; grid-template-columns: 1fr auto; column-gap: 8px; padding: 4px 0; border-top: 1px dotted var(--line); }
+  .hist-row .hist-t { grid-column: 1 / -1; color: var(--ink-soft); }
+  .hist-row.hit .hist-t { color: var(--red); }
+  .hist-row.hit { color: var(--red); }
+  .hist-n { text-align: right; font-weight: bold; }
   .status.ok { background: var(--green-bg); color: var(--green); }
   .status.warn { background: var(--amber-bg); color: var(--amber); }
   .status.over { background: var(--red-bg); color: var(--red); }
@@ -205,6 +216,19 @@
   <div class="step">
     <h2>Your day counts</h2>
     <div class="board" id="board"></div>
+    <details id="rulesSection" style="margin-top:14px;">
+      <summary class="hint" style="cursor:pointer; font-size:12px; color:var(--ink);">How each country counts days &mdash; rules checked <span id="rulesCheckedLabel"></span></summary>
+      <div id="rulesStale" class="print-note-box" style="display:none; margin-top:8px; border-color:var(--amber);"></div>
+      <div class="hint" style="margin-top:8px; line-height:1.7;">
+        <p><b>United Kingdom</b> &mdash; tax year 6 April to 5 April. A day counts only if he is in the UK <b>at midnight</b>: the arrival day counts, the day he leaves doesn&rsquo;t, and pure transit doesn&rsquo;t. Under 16 days (if UK-resident in any of the last 3 tax years) or under 46 (if not) = automatically non-resident; 183 or more = automatically resident; in between, his UK ties decide (family, home, work, 90 days in either of the last 2 years, and for leavers, the country tie). Rare extras not tracked here: up to 60 days of exceptional circumstances can be ignored, and a &ldquo;deeming&rdquo; rule can count some departure days for people with 3+ ties and 30+ such days. <a href="https://www.gov.uk/government/publications/rdr3-statutory-residence-test-srt" target="_blank" rel="noopener">HMRC RDR3</a></p>
+        <p><b>Schengen</b> &mdash; 90 days in any rolling 180-day period, all Schengen countries together. Entry and exit days both count. <a href="https://eur-lex.europa.eu/eli/reg/2016/399/oj" target="_blank" rel="noopener">Schengen Borders Code, Regulation (EU) 2016/399</a></p>
+        <p><b>Italy</b> &mdash; calendar year. Resident if, for most of the year (183 days, or 184 in a leap year), he is physically present, registered, or has his habitual home or the centre of his personal and family life in Italy. Since 2024 any part of a day counts. <a href="https://agenziaentrate.gov.it/portale/documents/20143/6519685/Circolare_20_del_4_11_2024_Eng.pdf/bdacb2e0-a699-5180-719e-665210459d75" target="_blank" rel="noopener">Agenzia delle Entrate, Circular 20/E (2024)</a></p>
+        <p><b>Cyprus</b> &mdash; calendar year. Resident with more than 183 days, or under the 60-day rule: 60+ days in Cyprus, no more than 183 days in any other single country, a Cyprus business, job or directorship, and a home in Cyprus. From 1 January 2026 he no longer has to be non-resident everywhere else. The departure day counts as outside Cyprus and the arrival day as inside; in and out on the same day counts as inside, out and back on the same day as outside. <a href="https://taxsummaries.pwc.com/cyprus/individual/residence" target="_blank" rel="noopener">PwC Tax Summaries &ndash; Cyprus</a></p>
+        <p><b>United States</b> &mdash; substantial presence test: at least 31 days in the current year <b>and</b> 183 days over three years, counting all days this year, a third of last year&rsquo;s and a sixth of the year before. Any part of a day counts; transit under 24 hours between two places outside the US doesn&rsquo;t. A closer-connection exception (Form 8840) can apply below 183 days in the current year. <a href="https://www.irs.gov/individuals/international-taxpayers/substantial-presence-test" target="_blank" rel="noopener">IRS</a></p>
+        <p><b>UAE</b> &mdash; resident with 183 days in any 12 consecutive months, or 90 days with UAE/GCC nationality or a residence permit plus a home or a job/business in the UAE, or if the UAE is his main home and centre of interests. Any part of a day counts. <a href="https://www.ey.com/en_gl/technical/tax-alerts/uae-issues-additional-guidance-on-determination-of-tax-residency" target="_blank" rel="noopener">Cabinet Decision 85/2022 (EY summary)</a></p>
+        <p>These counts are a guide for his tax adviser, who should confirm residence each year. A monthly check looks for rule changes; a change is applied from the date it starts, so earlier years keep the rule that applied then.</p>
+      </div>
+    </details>
   </div>
 
   <div class="step">
@@ -1114,96 +1138,256 @@ const REGION_COLORS = {
   Cyprus:  { bg: '#f0e2f5', border: '#7a3a9e', text: '#7a3a9e' },
   Other:   { bg: '#eee', border: '#888', text: '#5b6472' }
 };
+// ================= day counting, by each country's own official rule =================
+// Checked against official / professional sources on RULES_CHECKED (see "How each country counts
+// days" below the cards). A monthly check reports any change; changes are applied by hand, with
+// the date they start from, so earlier years keep the rule that applied to them.
+const RULES_CHECKED = '2026-10-16';
+const DAY_MS = 86400000;
+function isLeapYear(y) { return (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0; }
+function niceDate(ms) { return new Date(ms).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }); }
+function presenceMap() {
+  const m = new Map();
+  trips.forEach(t => {
+    const e = parseDate(t.exit);
+    for (let d = parseDate(t.entry); d <= e; d += DAY_MS) {
+      if (!m.has(d)) m.set(d, new Set());
+      m.get(d).add(t.country);
+    }
+  });
+  return m;
+}
+// The days that COUNT for a country (or group), sorted, under the country's convention:
+//  'anyPart'  – any part of a day counts, arrival and departure days included (Schengen, US, UAE, Italy)
+//  'midnight' – UK: only a day he is there at midnight. The day he leaves doesn't count, unless he
+//               comes back the same day; the day he arrives does.
+//  'cyprus'   – Cyprus: departure day = outside, arrival day = inside; in-and-out on one day = inside;
+//               out-and-back on one day = outside.
+// "Leaves that day" = the calendar shows another country that day, or a flight leaves from there.
+// If the calendar doesn't say he left, the day is counted (the safe side for a limit).
+function countedDays(pm, inSet, mode) {
+  const isIn = d => { const s = pm.get(d); if (!s) return false; for (const c of s) if (inSet(c)) return true; return false; };
+  const elsewhereToo = d => { const s = pm.get(d); if (!s) return false; for (const c of s) if (!inSet(c)) return true; return false; };
+  const days = [...pm.keys()].filter(isIn).sort((a, b) => a - b);
+  if (mode === 'anyPart') return days;
+  const legsByDay = new Map();
+  legs.forEach(l => { const d = parseDate(l.depDate); if (!legsByDay.has(d)) legsByDay.set(d, []); legsByDay.get(d).push(l); });
+  return days.filter(d => {
+    const today = chainAwareSortLegs(legsByDay.get(d) || []);
+    const moves = today.map(l => inSet(l.from) && !inSet(l.to) ? 'out' : !inSet(l.from) && inSet(l.to) ? 'in' : null).filter(Boolean);
+    const leftToday = moves.includes('out') || (!isIn(d + DAY_MS) && elsewhereToo(d));
+    if (!leftToday) return true;
+    if (mode === 'midnight') return moves.length > 0 && moves[moves.length - 1] === 'in';   // came back before midnight
+    // cyprus
+    if (moves.length) return moves[0] === 'in';                                               // in-and-out same day = inside
+    return !isIn(d - DAY_MS);                                                                 // one-day visit (no flights logged) = inside
+  });
+}
+const inRange = (days, a, b) => days.filter(d => d >= a && d <= b);
+const nthDay = (days, a, b, n) => { const r = inRange(days, a, b); return r.length >= n ? r[n - 1] : null; };
+function ledgerYears(asofYear) {
+  let first = asofYear;
+  trips.forEach(t => { const y = new Date(parseDate(t.entry)).getUTCFullYear(); if (y && y < first) first = y; });
+  const out = [];
+  for (let y = Math.max(first, asofYear - 9); y <= asofYear; y++) out.push(y);
+  return out;
+}
+
 function computeStats(asof) {
   const stats = [];
-  const nextJan1 = (y) => Date.UTC(y + 1, 0, 1);
+  const pm = presenceMap();
   const asofYear = new Date(asof).getUTCFullYear();
+  const yStart = y => Date.UTC(y, 0, 1), yEnd = y => Date.UTC(y, 11, 31);
+  const years = ledgerYears(asofYear);
+  const region = r => c => mapCountryToRegion(c) === r;
 
-  const schStart = asof - 179 * 86400000;
-  let schDays = 0;
-  schDays = distinctDays(t => t.region === 'Schengen', schStart, asof);
-  stats.push({ title: 'Schengen area', ruleLabel: '90 days in any rolling 180', used: schDays, threshold: 90,
-    statusClass: schDays >= 90 ? 'over' : schDays >= 75 ? 'warn' : 'ok', direction: 'atMost',
-    note: 'window: ' + fmt(schStart) + ' to ' + fmt(asof),
-    resetInfo: schDays > 0 ? 'Rolling window \u2014 if no more Schengen days are added, this fully clears by ' + fmt(asof + 180 * 86400000) + '.' : '' });
+  // ---- Schengen: 90 days in any rolling 180, all Schengen countries together ----
+  {
+    const days = countedDays(pm, region('Schengen'), 'anyPart');
+    const set = new Set(days);
+    const rolling = e => { let n = 0; for (let d = e - 179 * DAY_MS; d <= e; d += DAY_MS) if (set.has(d)) n++; return n; };
+    const winStart = asof - 179 * DAY_MS;
+    const used = inRange(days, winStart, asof).length;
+    const lines = [];
+    const firstInWin = inRange(days, winStart, asof)[0];
+    if (firstInWin) lines.push('Next day frees up on ' + niceDate(firstInWin + 180 * DAY_MS) + ' (his ' + niceDate(firstInWin) + ' day drops out).');
+    // per year: the highest 180-day count reached, and any time over 90
+    const history = years.map(y => {
+      let best = 0, bestDay = null, over = 0;
+      const end = Math.min(yEnd(y), asof);
+      for (let e = yStart(y); e <= end; e += DAY_MS) {
+        if (!set.has(e)) continue;
+        const n = rolling(e);
+        if (n > best) { best = n; bestDay = e; }
+        if (n > 90) over++;
+      }
+      return { label: String(y), days: inRange(days, yStart(y), end).length, reached: over > 0,
+        text: best ? 'highest ' + best + '/90 (' + niceDate(bestDay) + ')' + (over ? ' · <b>over 90 on ' + over + ' day(s)</b>' : '') : 'no Schengen days' };
+    });
+    stats.push({ key: 'schengen', title: 'Schengen area', ruleLabel: '90 days in any rolling 180 · entry and exit days count',
+      used, threshold: 90, direction: 'atMost', leftCount: Math.max(90 - used, 0), leftText: 'days left in this window',
+      statusClass: used > 90 ? 'over' : used >= 75 ? 'warn' : 'ok',
+      note: 'Window: ' + niceDate(winStart) + ' – ' + niceDate(asof) + '.',
+      lines, history, historyHead: 'Year · days in Schengen · highest 180-day count', reachedWord: 'over 90' });
+  }
 
-  const ukTY = ukTaxYearRange(asof);
-  let ukDays = 0;
-  ukDays = distinctDays(t => t.region === 'UK', ukTY.start, ukTY.end);
-  stats.push({ title: 'United Kingdom', ruleLabel: 'UK tax year ' + ukTY.label + ', ' + ukThresh + '-day test',
-    used: ukDays, threshold: ukThresh, direction: 'atMost',
-    statusClass: ukDays >= ukThresh ? 'over' : ukDays >= ukThresh * 0.75 ? 'warn' : 'ok', note: '',
-    resetInfo: 'This UK tax year\u2019s count resets on ' + fmt(ukTaxYearRange(ukTY.end + 86400000).start) + '.' });
+  // ---- UK: tax year 6 Apr – 5 Apr, a day counts only if he's there at midnight ----
+  {
+    const ty = ukTaxYearRange(asof);
+    const days = countedDays(pm, c => c === 'United Kingdom', 'midnight');
+    const touched = countedDays(pm, c => c === 'United Kingdom', 'anyPart');
+    const used = inRange(days, ty.start, ty.end).length;
+    const notCounted = inRange(touched, ty.start, ty.end).length - used;
+    const lines = [];
+    const hit = nthDay(days, ty.start, ty.end, ukThresh);
+    if (hit) lines.push('<span class="lim-hit">Reached ' + ukThresh + ' days on ' + niceDate(hit) + '</span>');
+    if (used >= 183) lines.push('<span class="lim-hit">183+ days: automatically UK resident this tax year.</span>');
+    if (notCounted > 0) lines.push(notCounted + ' departure day(s) not counted (he wasn’t in the UK at midnight).');
+    const tyYears = [];
+    years.forEach(y => { const r = ukTaxYearRange(Date.UTC(y, 3, 6)); if (r.start <= asof) tyYears.push(r); });
+    const history = tyYears.map(r => {
+      const n = inRange(days, r.start, Math.min(r.end, asof)).length;
+      const h183 = nthDay(days, r.start, r.end, 183);
+      const verdict = n >= 183 ? '<b>183+ → automatically resident</b> (reached ' + niceDate(h183) + ')'
+        : n < ukThresh ? 'under ' + ukThresh + ' → automatically non-resident'
+        : 'between ' + ukThresh + ' and 182 → his UK ties decide';
+      return { label: r.label + (r.end > asof ? ' (so far)' : ''), days: n, reached: n >= ukThresh, text: verdict };
+    });
+    stats.push({ key: 'uk', title: 'United Kingdom', ruleLabel: 'Tax year ' + ty.label + ' · counts midnights · must stay under ' + ukThresh,
+      used, threshold: ukThresh, direction: 'atMost', leftCount: Math.max(ukThresh - 1 - used, 0), leftText: 'more days allowed',
+      statusClass: used >= ukThresh ? 'over' : used >= ukThresh * 0.75 ? 'warn' : 'ok',
+      note: 'Arrival day counts; the day he leaves doesn’t. 183+ days = automatically resident; between ' + ukThresh + ' and 182, his UK ties (home, family, work, 90 days in an earlier year) decide.',
+      lines, history, historyHead: 'Tax year · midnights in the UK · result', reachedWord: 'at or over ' + ukThresh,
+      resetInfo: 'New tax year starts ' + niceDate(ty.end + DAY_MS) + '.' });
+  }
 
-  const asofDate = new Date(asof);
-  const curYear = asofDate.getUTCFullYear();
-  const yearDays = (yr) => {
-    const ys = Date.UTC(yr, 0, 1), ye = Date.UTC(yr, 11, 31);
-    let d = 0;
-    d = distinctDays(t => t.region === 'US', ys, Math.min(ye, asof));
-    return d;
-  };
-  const curD = yearDays(curYear), prevD = yearDays(curYear - 1), prev2D = yearDays(curYear - 2);
-  const weighted = Math.round(curD + prevD / 3 + prev2D / 6);
-  stats.push({ title: 'United States', ruleLabel: 'weighted 3yr total, current yr ' + curD + ' days', used: weighted, threshold: 183,
-    direction: 'atMost', statusClass: weighted >= 183 ? 'over' : weighted >= 150 ? 'warn' : 'ok',
-    note: curYear + ': ' + curD + '  +  ' + (curYear - 1) + '/3: ' + Math.round(prevD / 3) + '  +  ' + (curYear - 2) + '/6: ' + Math.round(prev2D / 6),
-    resetInfo: 'The ' + curYear + ' portion resets 1 Jan ' + (curYear + 1) + ' \u2014 but the weighted formula still carries a fraction of ' + curYear + ' and ' + (curYear - 1) + ' forward, so the total doesn\u2019t drop to zero.' });
+  // ---- US: substantial presence test ----
+  {
+    const days = countedDays(pm, region('US'), 'anyPart');
+    const yr = (y, upto) => inRange(days, yStart(y), Math.min(yEnd(y), upto)).length;
+    const test = (y, upto) => {
+      const cur = yr(y, upto), prev = yr(y - 1, Infinity), prev2 = yr(y - 2, Infinity);
+      const weighted = cur + prev / 3 + prev2 / 6;
+      const need = Math.max(31, Math.ceil(183 - prev / 3 - prev2 / 6));
+      const curDays = inRange(days, yStart(y), Math.min(yEnd(y), upto));
+      return { cur, prev, prev2, weighted, met: cur >= 31 && weighted >= 183, metOn: curDays[need - 1] || null, need };
+    };
+    const t = test(asofYear, asof);
+    const shown = Math.floor(t.weighted * 10) / 10;
+    const lines = [];
+    if (t.cur < 31) lines.push('Only ' + t.cur + ' day(s) in ' + asofYear + ' — under the 31-day minimum, so the test isn’t met this year whatever the total.');
+    if (t.met) lines.push('<span class="lim-hit">Test met on ' + niceDate(t.metOn) + '</span>');
+    const history = years.map(y => {
+      const h = test(y, asof);
+      return { label: String(y) + (y === asofYear ? ' (so far)' : ''), days: h.cur, reached: h.met,
+        text: 'weighted ' + (Math.floor(h.weighted * 10) / 10) + (h.met ? ' · <b>test met ' + niceDate(h.metOn) + '</b>' : h.cur < 31 ? ' · under 31 days' : ' · not met') };
+    });
+    stats.push({ key: 'us', title: 'United States', ruleLabel: 'Substantial presence · 31+ days this year AND 183 weighted · any part of a day',
+      used: shown, threshold: 183, direction: 'atMost', leftCount: Math.max(t.need - 1 - t.cur, 0), leftText: 'more days allowed this year',
+      statusClass: t.met ? 'over' : t.weighted >= 150 && t.cur >= 31 ? 'warn' : 'ok',
+      note: asofYear + ': ' + t.cur + ' + ' + (asofYear - 1) + ': ' + t.prev + '÷3 + ' + (asofYear - 2) + ': ' + t.prev2 + '÷6. Transit under 24 hours between two foreign places doesn’t count — mark those days in the notes for his adviser.',
+      lines, history, historyHead: 'Year · US days · weighted total', reachedWord: 'test met',
+      resetInfo: 'New count from 1 Jan ' + (asofYear + 1) + ', but a third of this year carries into next year’s total and a sixth into the year after.' });
+  }
 
-  const uaeStart = asof - 364 * 86400000;
-  let uaeDays = 0;
-  uaeDays = distinctDays(t => t.region === 'UAE', uaeStart, asof);
-  const uaeStatus = uaeDays >= uaeThresh ? 'ok' : uaeDays >= uaeThresh - 30 ? 'warn' : 'over';
-  stats.push({ title: 'UAE', ruleLabel: uaeThresh + '-day route in rolling 12 months', used: uaeDays, threshold: uaeThresh,
-    statusClass: uaeStatus, direction: 'atLeast',
-    note: uaeThresh === 90 ? '90-day route: permit + home + business' : '183-day route: physical presence, treaty-grade',
-    resetInfo: uaeDays > 0 ? 'Rolling window \u2014 if no more UAE days are added, this fully clears by ' + fmt(asof + 365 * 86400000) + '.' : '' });
+  // ---- UAE: 12 consecutive months, needs AT LEAST the threshold ----
+  {
+    const days = countedDays(pm, region('UAE'), 'anyPart');
+    const winStart = asof - 364 * DAY_MS;
+    const used = inRange(days, winStart, asof).length;
+    const lines = [];
+    if (used >= uaeThresh) lines.push('<span class="lim-ok">' + uaeThresh + ' days reached on ' + niceDate(nthDay(days, winStart, asof, uaeThresh)) + ' (counting from ' + niceDate(winStart) + ')</span>');
+    const firstInWin = inRange(days, winStart, asof)[0];
+    if (firstInWin) lines.push('Oldest day in the window (' + niceDate(firstInWin) + ') drops out on ' + niceDate(firstInWin + 365 * DAY_MS) + '.');
+    const history = years.map(y => {
+      const n = inRange(days, yStart(y), Math.min(yEnd(y), asof)).length;
+      const h = nthDay(days, yStart(y), yEnd(y), uaeThresh);
+      return { label: String(y) + (y === asofYear ? ' (so far)' : ''), days: n, reached: !!h && h <= asof,
+        text: h && h <= asof ? '<b>' + uaeThresh + ' reached ' + niceDate(h) + '</b>' : (uaeThresh - n) + ' short of ' + uaeThresh };
+    });
+    stats.push({ key: 'uae', title: 'UAE', ruleLabel: uaeThresh + '-day route · any 12 consecutive months · any part of a day',
+      used, threshold: uaeThresh, direction: 'atLeast', leftCount: Math.max(uaeThresh - used, 0), leftText: 'more days needed',
+      statusClass: used >= uaeThresh ? 'ok' : used >= uaeThresh - 30 ? 'warn' : 'over',
+      note: (uaeThresh === 90 ? 'The 90-day route also needs UAE nationality, a residence permit or GCC nationality, plus a home or a job/business in the UAE.' : 'The 183-day route needs only the days.') + ' Window: ' + niceDate(winStart) + ' – ' + niceDate(asof) + '.',
+      lines, history, historyHead: 'Calendar year · UAE days', reachedWord: uaeThresh + ' reached' });
+  }
 
-  const italyYearStart = Date.UTC(new Date(asof).getUTCFullYear(), 0, 1);
-  const italyYearEnd = Date.UTC(new Date(asof).getUTCFullYear(), 11, 31);
-  let italyDays = 0;
-  italyDays = distinctDays(t => t.country === 'Italy', italyYearStart, Math.min(italyYearEnd, asof));
-  stats.push({ title: 'Italy', ruleLabel: '183 days per calendar year (Italy\u2019s own residency test)', used: italyDays, threshold: 183,
-    direction: 'atMost', statusClass: italyDays >= 183 ? 'over' : italyDays >= 150 ? 'warn' : 'ok',
-    note: 'Separate from the Schengen 90/180 pool above \u2014 this is Italy\u2019s own domestic threshold, based on time in Italy specifically.',
-    resetInfo: 'Resets 1 Jan ' + (asofYear + 1) + '.' });
+  // ---- Italy: more than half the calendar year (183, or 184 in a leap year), any part of a day ----
+  {
+    const lim = isLeapYear(asofYear) ? 184 : 183;
+    const days = countedDays(pm, c => c === 'Italy', 'anyPart');
+    const used = inRange(days, yStart(asofYear), Math.min(yEnd(asofYear), asof)).length;
+    const lines = [];
+    const hit = nthDay(days, yStart(asofYear), Math.min(yEnd(asofYear), asof), lim);
+    if (hit) lines.push('<span class="lim-hit">Reached ' + lim + ' days on ' + niceDate(hit) + '</span>');
+    const history = years.map(y => {
+      const L = isLeapYear(y) ? 184 : 183, end = Math.min(yEnd(y), asof);
+      const n = inRange(days, yStart(y), end).length, h = nthDay(days, yStart(y), end, L);
+      return { label: String(y) + (y === asofYear ? ' (so far)' : ''), days: n, reached: !!h, text: h ? '<b>' + L + '+ reached ' + niceDate(h) + '</b>' : (L - n) + ' under ' + L };
+    });
+    stats.push({ key: 'italy', title: 'Italy', ruleLabel: asofYear + ' · ' + lim + '+ days = resident · any part of a day counts',
+      used, threshold: lim, direction: 'atMost', leftCount: Math.max(lim - 1 - used, 0), leftText: 'more days allowed',
+      statusClass: used >= lim ? 'over' : used >= 150 ? 'warn' : 'ok',
+      note: 'Separate from Schengen. Italy can also treat him as resident through the population register, a habitual home, or where his personal and family life is centred, whatever the day count.',
+      lines, history, historyHead: 'Year · days in Italy', reachedWord: 'limit reached',
+      resetInfo: 'New count from 1 Jan ' + (asofYear + 1) + '.' });
+  }
 
-  const cyYearStart = Date.UTC(new Date(asof).getUTCFullYear(), 0, 1);
-  const cyYearEnd = Date.UTC(new Date(asof).getUTCFullYear(), 11, 31);
-  let cyprusDays = 0;
-  cyprusDays = distinctDays(t => t.region === 'Cyprus', cyYearStart, Math.min(cyYearEnd, asof));
-  stats.push({ title: 'Cyprus', ruleLabel: '183 days per calendar year (Cyprus\u2019s own residency test)', used: cyprusDays, threshold: 183,
-    direction: 'atMost', statusClass: cyprusDays >= 183 ? 'over' : cyprusDays >= 150 ? 'warn' : 'ok',
-    note: 'Cyprus is outside Schengen and outside the UAE/UK/US tests \u2014 this is its own separate domestic threshold. Note: Cyprus also offers a 60-day route for people who aren\u2019t tax-resident anywhere else and have ties there (business/property) \u2014 not modeled here, worth checking separately if relevant.',
-    resetInfo: 'Resets 1 Jan ' + (asofYear + 1) + '.' });
-
+  // ---- Cyprus: more than 183 days in the calendar year, or the 60-day rule; departure day = outside ----
+  {
+    const days = countedDays(pm, c => c === 'Cyprus', 'cyprus');
+    const used = inRange(days, yStart(asofYear), Math.min(yEnd(asofYear), asof)).length;
+    const lines = [];
+    const hit = nthDay(days, yStart(asofYear), yEnd(asofYear), 184);
+    if (hit && hit <= asof) lines.push('<span class="lim-hit">Over 183 days on ' + niceDate(hit) + '</span>');
+    const otherMax = y => {
+      const other = {};
+      pm.forEach((cs, d) => { if (d >= yStart(y) && d <= Math.min(yEnd(y), asof)) cs.forEach(c => { if (c !== 'Cyprus') other[c] = (other[c] || 0) + 1; }); });
+      return Object.entries(other).sort((a, b) => b[1] - a[1])[0];
+    };
+    const top = otherMax(asofYear);
+    lines.push('60-day rule: ' + Math.min(used, 60) + '/60 Cyprus days' + (top ? '; most days in one other country: ' + top[0] + ' ' + top[1] + ' (must stay 183 or under)' : '') + '. Also needs a Cyprus business, job or directorship, and a home in Cyprus.');
+    const history = years.map(y => {
+      const end = Math.min(yEnd(y), asof), n = inRange(days, yStart(y), end).length, h = nthDay(days, yStart(y), end, 184);
+      const tp = otherMax(y);
+      const sixty = n >= 60 && (!tp || tp[1] <= 183);
+      return { label: String(y) + (y === asofYear ? ' (so far)' : ''), days: n, reached: !!h,
+        text: h ? '<b>over 183 on ' + niceDate(h) + '</b>' : sixty ? '60-day rule days met (other conditions apply)' : (184 - n) + ' short of 184' };
+    });
+    stats.push({ key: 'cyprus', title: 'Cyprus', ruleLabel: asofYear + ' · more than 183 days = resident · departure day counts as outside',
+      used, threshold: 184, direction: 'atMost', leftCount: Math.max(183 - used, 0), leftText: 'more days allowed',
+      statusClass: used >= 184 ? 'over' : used >= 150 ? 'warn' : 'ok',
+      note: 'Arrival day counts as in Cyprus, the departure day as outside. From 1 Jan 2026 the 60-day rule no longer requires him to be non-resident everywhere else.',
+      lines, history, historyHead: 'Year · days in Cyprus', reachedWord: 'over 183',
+      resetInfo: 'New count from 1 Jan ' + (asofYear + 1) + '.' });
+  }
   return stats;
 }
-function makeStub(title, ruleLabel, used, threshold, statusClass, note, direction, resetInfo) {
-  direction = direction || 'atMost';
+function makeStub(s) {
   const el = document.createElement('div');
   el.className = 'stub';
-  const color = statusClass === 'over' ? 'var(--red)' : statusClass === 'warn' ? 'var(--amber)' : 'var(--green)';
+  el.dataset.key = s.key;
+  const color = s.statusClass === 'over' ? 'var(--red)' : s.statusClass === 'warn' ? 'var(--amber)' : 'var(--green)';
   el.style.setProperty('--stub-color', color);
-  const pct = Math.min((used / threshold) * 100, 100);
-  let statusText, tailNum, tailText;
-  if (direction === 'atLeast') {
-    tailNum = Math.max(threshold - used, 0);
-    tailText = 'needed to qualify';
-    statusText = statusClass === 'ok' ? 'route met' : statusClass === 'warn' ? 'approaching threshold' : 'route not yet met';
-  } else {
-    tailNum = Math.max(threshold - used, 0);
-    tailText = 'remaining';
-    statusText = statusClass === 'over' ? 'threshold reached' : statusClass === 'warn' ? 'approaching limit' : 'within limit';
-  }
+  const pct = Math.min((s.used / s.threshold) * 100, 100);
+  const statusText = s.direction === 'atLeast'
+    ? (s.statusClass === 'ok' ? 'route met' : s.statusClass === 'warn' ? 'approaching' : 'not yet met')
+    : (s.statusClass === 'over' ? 'limit reached' : s.statusClass === 'warn' ? 'approaching limit' : 'within limit');
+  const hist = s.history || [];
+  const reachedN = hist.filter(h => h.reached).length;
   el.innerHTML =
-    '<h3>' + title + '</h3>' +
-    '<div class="rule">' + ruleLabel + '</div>' +
-    '<div class="num-row"><span class="num">' + used + '</span><span class="of">/ ' + threshold + ' days</span></div>' +
+    '<h3>' + s.title + '</h3>' +
+    '<div class="rule">' + s.ruleLabel + '</div>' +
+    '<div class="num-row"><span class="num">' + s.used + '</span><span class="of">/ ' + s.threshold + ' days</span></div>' +
     '<div class="bar-track"><div class="bar-fill" style="width:' + pct + '%; background:' + color + '"></div></div>' +
-    '<span class="status ' + statusClass + '">' + statusText + (tailNum > 0 ? ' &middot; ' + tailNum + ' ' + tailText : '') + '</span>' +
-    (resetInfo ? '<div class="hint" style="margin-top:6px; color:var(--ink-soft);">&#8635; ' + resetInfo + '</div>' : '') +
-    (note ? '<div class="hint" style="margin-top:8px;">' + note + '</div>' : '');
+    '<span class="status ' + s.statusClass + '">' + statusText + (s.leftCount > 0 ? ' &middot; ' + s.leftCount + ' ' + s.leftText : '') + '</span>' +
+    (s.lines && s.lines.length ? '<div class="stub-lines">' + s.lines.map(l => '<div>' + l + '</div>').join('') + '</div>' : '') +
+    (hist.length ? '<details class="stub-hist"><summary>History by year &middot; ' + s.reachedWord + ' in ' + reachedN + ' of ' + hist.length + '</summary>' +
+      '<div class="hint" style="margin:4px 0;">' + s.historyHead + '</div>' +
+      hist.slice().reverse().map(h => '<div class="hist-row' + (h.reached ? ' hit' : '') + '"><span>' + h.label + '</span><span class="hist-n">' + h.days + ' days</span><span class="hist-t">' + h.text + '</span></div>').join('') + '</details>' : '') +
+    (s.resetInfo ? '<div class="hint" style="margin-top:6px; color:var(--ink-soft);">&#8635; ' + s.resetInfo + '</div>' : '') +
+    (s.note ? '<div class="hint" style="margin-top:6px;">' + s.note + '</div>' : '') +
+    '<div style="margin-top:6px;"><a href="#rulesSection" class="hint">How is this counted? &darr;</a></div>';
   return el;
 }
 function jumpToYear(y) {
@@ -1249,10 +1433,17 @@ function renderBoard() {
   const board = document.getElementById('board');
   board.innerHTML = '';
   const stats = computeStats(asof);
-  stats.forEach(s => board.appendChild(makeStub(s.title, s.ruleLabel, s.used, s.threshold, s.statusClass, s.note, s.direction, s.resetInfo)));
+  stats.forEach(s => board.appendChild(makeStub(s)));
+  const rl = document.getElementById('rulesCheckedLabel');
+  if (rl) {
+    rl.textContent = niceDate(parseDate(RULES_CHECKED));
+    const age = Math.round((Date.now() - parseDate(RULES_CHECKED)) / DAY_MS);
+    const st = document.getElementById('rulesStale');
+    if (age > 45) { st.style.display = 'block'; st.textContent = 'The rules were last checked ' + age + ' days ago. Ask for a rules check before relying on these counts.'; }
+  }
   renderYearJumpButtons();
 
-  const ukStub = board.children[1];
+  const ukStub = board.querySelector('[data-key="uk"]');
   const ukSel = document.createElement('select');
   ukSel.className = 'mini';
   ukSel.innerHTML = '<option value="16">resident recently -&gt; 16-day test</option>' +
@@ -1262,7 +1453,7 @@ function renderBoard() {
   ukSel.onchange = async () => { await saveUkThresh(ukSel.value); renderBoard(); };
   ukStub.appendChild(ukSel);
 
-  const uaeStub = board.children[3];
+  const uaeStub = board.querySelector('[data-key="uae"]');
   const uaeSel = document.createElement('select');
   uaeSel.className = 'mini';
   uaeSel.innerHTML = '<option value="90">90-day route (permit+home+business)</option><option value="183">183-day route (treaty)</option>';
@@ -3381,7 +3572,7 @@ async function cleanupLegacyUndoFields() {
 // A tab left open keeps running the old version after an update is uploaded, so new bills can
 // miss newer features (e.g. a type that didn't exist yet). Every few minutes, and whenever the
 // tab comes back into view, compare this page's version with the one that's live.
-const APP_VERSION = '2026-10-16g';
+const APP_VERSION = '2026-10-16h';
 async function checkForNewerVersion() {
   try {
     const res = await fetch(location.href.split('#')[0], { cache: 'no-store' });
