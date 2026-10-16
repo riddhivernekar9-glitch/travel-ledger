@@ -222,11 +222,11 @@
   </div>
 
   <div class="step" id="pdfImportStep">
-    <h2>Add bookings from PDFs or photos</h2>
-    <p class="hint" style="margin-bottom:10px;">Airline e-tickets and itineraries (Emirates, British Airways, KLM, Lufthansa&hellip;) hotel confirmations or bills (Hilton, Marriott&hellip;), and photos of boarding passes. On a phone you can take the photo straight from the camera.
-      <b>The files are read on this device only &mdash; they are never uploaded or stored.</b> New flights and hotel stays go straight into the calendar; anything already logged (e.g. from a boarding pass) is skipped; only items that clash with the ledger wait for your yes / no. Nothing already in the ledger is changed, and Undo reverses an import.</p>
-    <label class="btn-primary" style="display:inline-block; cursor:pointer; padding:8px 14px;">Choose PDFs or photos&hellip;
-      <input type="file" id="pdfImportInput" accept="application/pdf,.pdf,image/*" multiple style="display:none;"></label>
+    <h2>Add bookings &amp; bills from files or photos</h2>
+    <p class="hint" style="margin-bottom:10px;">Airline e-tickets and itineraries (Emirates, British Airways, KLM, Lufthansa&hellip;) hotel confirmations (Hilton, Marriott&hellip;), boarding passes, and bills or receipts (restaurant, taxi, shop, laundry&hellip;) &mdash; as PDF, photo (JPEG, PNG&hellip;), saved web page (HTML) or saved email (.eml). On a phone you can take the photo straight from the camera.
+      <b>The files are read on this device only &mdash; they are never uploaded or stored.</b> New flights, hotel stays and bills go straight into the calendar; anything already logged (e.g. from a boarding pass) is skipped; only items that clash with the ledger wait for your yes / no. Nothing already in the ledger is changed, and Undo reverses an import.</p>
+    <label class="btn-primary" style="display:inline-block; cursor:pointer; padding:8px 14px;">Choose files or photos&hellip;
+      <input type="file" id="pdfImportInput" accept="application/pdf,.pdf,image/*,.heic,.heif,.html,.htm,.mht,.eml,.txt,text/html,text/plain,message/rfc822" multiple style="display:none;"></label>
     <div id="pdfImportStatus" class="hint" style="margin-top:8px;"></div>
     <div id="pdfImportReview"></div>
   </div>
@@ -3380,7 +3380,7 @@ async function cleanupLegacyUndoFields() {
 // A tab left open keeps running the old version after an update is uploaded, so new bills can
 // miss newer features (e.g. a type that didn't exist yet). Every few minutes, and whenever the
 // tab comes back into view, compare this page's version with the one that's live.
-const APP_VERSION = '2026-10-16e';
+const APP_VERSION = '2026-10-16f';
 async function checkForNewerVersion() {
   try {
     const res = await fetch(location.href.split('#')[0], { cache: 'no-store' });
@@ -3578,7 +3578,7 @@ function parseHotels(lines, knownCountries) {
   if (!cin || !cout || cout <= cin || (Date.parse(cout) - Date.parse(cin)) > 60 * 86400000) return [];
   // a flight itinerary also says "departure"/"arrival": only treat it as a hotel if it reads like one
   if (!HOTEL_BRANDS.test(text) && !/check[\s-]?in/i.test(text)) return [];
-  const nameLine = lines.find(l => HOTEL_BRANDS.test(l) && l.length < 90 && !/check|arriv|depart|total|tax|rate/i.test(l)) || '';
+  const nameLine = lines.find(l => HOTEL_BRANDS.test(l) && l.length < 90 && !/check|arriv|depart|total|tax|rate|reservation|confirm|thank|booking|points|bonvoy|honors/i.test(l)) || '';
   // country: the first country named in the document; city: the first known city named
   let country = '', city = '';
   let best = Infinity;
@@ -3707,6 +3707,117 @@ async function ocrPdfToLines(pdf, onProgress) {
   return lines;
 }
 
+// ---- other file types: web pages, saved emails, plain text (read on this device) ----
+function htmlToLines(html) {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  doc.querySelectorAll('script,style,noscript,head').forEach(n => n.remove());
+  const blocks = 'br,p,div,tr,li,h1,h2,h3,h4,h5,h6,table,section,article,header,footer,blockquote,dt,dd,center';
+  doc.querySelectorAll(blocks).forEach(n => n.appendChild(doc.createTextNode('\n')));
+  doc.querySelectorAll('td,th').forEach(n => n.appendChild(doc.createTextNode('  ')));
+  return (doc.body ? doc.body.textContent : '').split('\n').map(l => l.replace(/[\s ]+/g, ' ').trim()).filter(Boolean);
+}
+function decodeQuotedPrintable(s) {
+  const bytes = [];
+  s = s.replace(/=\r?\n/g, '');
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === '=' && /^[0-9A-F]{2}$/i.test(s.substr(i + 1, 2))) { bytes.push(parseInt(s.substr(i + 1, 2), 16)); i += 2; }
+    else bytes.push(s.charCodeAt(i) & 0xff);
+  }
+  return new TextDecoder('utf-8').decode(new Uint8Array(bytes));
+}
+function decodeBase64Text(s) {
+  try { const b = atob(s.replace(/\s+/g, '')); return new TextDecoder('utf-8').decode(Uint8Array.from(b, c => c.charCodeAt(0))); } catch (e) { return ''; }
+}
+// a saved email (.eml): the HTML part if there is one, otherwise the plain-text part
+function emlToLines(raw) {
+  const parts = [];
+  const walk = (chunk) => {
+    const sep = chunk.search(/\r?\n\r?\n/);
+    const head = sep >= 0 ? chunk.slice(0, sep) : chunk, body = sep >= 0 ? chunk.slice(sep).replace(/^\r?\n\r?\n/, '') : '';
+    const h = head.replace(/\r?\n[ \t]+/g, ' ');
+    const type = (/^content-type:\s*([^;\r\n]+)/im.exec(h) || [, 'text/plain'])[1].trim().toLowerCase();
+    const enc = (/^content-transfer-encoding:\s*([^\s;]+)/im.exec(h) || [, ''])[1].toLowerCase();
+    const bnd = /boundary="?([^";\r\n]+)"?/i.exec(h);
+    if (/^multipart\//.test(type) && bnd) {
+      body.split('--' + bnd[1]).slice(1).forEach(p => { if (!/^--/.test(p)) walk(p.replace(/^\r?\n/, '')); });
+      return;
+    }
+    if (!/^text\/(html|plain)/.test(type)) return;
+    const text = enc === 'base64' ? decodeBase64Text(body) : enc === 'quoted-printable' ? decodeQuotedPrintable(body) : body;
+    parts.push({ type, text });
+  };
+  walk(raw);
+  const html = parts.find(p => p.type === 'text/html'), plain = parts.find(p => p.type === 'text/plain');
+  const subject = (/^subject:\s*(.*)$/im.exec(raw) || [, ''])[1];
+  const lines = html ? htmlToLines(html.text) : plain ? plain.text.split(/\r?\n/).map(l => l.trim()).filter(Boolean) : [];
+  return subject ? lines.concat([subject.trim()]) : lines; // subject last, so it never wins as the name
+}
+
+// ---- bills and receipts (restaurant, taxi, shop, laundry…): date, total, currency, name, type ----
+const RECEIPT_CURRENCIES = ['AED', 'GBP', 'EUR', 'USD', 'CHF', 'SGD', 'PHP', 'KES', 'SAR', 'QAR', 'OMR', 'BHD', 'KWD', 'INR', 'JPY', 'HKD', 'AUD', 'CAD', 'NZD', 'THB', 'MYR', 'IDR', 'CNY', 'TRY', 'EGP', 'ZAR', 'SEK', 'NOK', 'DKK', 'PLN', 'CZK', 'HUF', 'MXN', 'BRL', 'MVR', 'LKR', 'MAD', 'JOD', 'LBP', 'ILS', 'KRW', 'VND', 'TZS', 'MUR', 'SCR'];
+const CURRENCY_SYMBOLS = [[/£/, 'GBP'], [/€/, 'EUR'], [/\bdhs?\b|\bdirhams?\b|د\.إ/i, 'AED'], [/\bfr\.|\bsfr\b/i, 'CHF'], [/₹|\brs\.?\s?\d/i, 'INR'], [/₱/, 'PHP'], [/¥/, 'JPY'], [/\bS\$/, 'SGD'], [/\bHK\$/, 'HKD'], [/\bA\$/, 'AUD'], [/\bC\$/, 'CAD'], [/\$/, 'USD']];
+function moneyIn(line) {
+  const out = [];
+  const re = /(?:^|[^\d.,])(\d{1,3}(?:[ ,.'’]\d{3})+(?:[.,]\d{1,2})?|\d+[.,]\d{2}|\d+)(?![\d%])/g;
+  let m;
+  while ((m = re.exec(line))) {
+    let s = m[1];
+    // 1.234,56 / 1 234,56 (continental) vs 1,234.56
+    if (/[.,]\d{1,2}$/.test(s)) { const dec = s.slice(-3).replace(/^\d/, ''); const whole = s.slice(0, s.length - dec.length).replace(/[ ,.'’]/g, ''); s = whole + '.' + dec.slice(1); }
+    else s = s.replace(/[ ,.'’]/g, '');
+    const v = parseFloat(s);
+    if (isFinite(v)) out.push(v);
+  }
+  return out;
+}
+function parseReceipt(lines) {
+  const text = lines.join('\n');
+  // the total: a "total / amount due / to pay" line (not subtotal, VAT or item counts), else the largest priced amount
+  const totalRe = /(grand\s*total|total\s*(due|amount|to\s*pay|paid|payable|incl\w*|eur|gbp|aed|usd)?\b|amount\s*(due|paid|payable)|balance\s*(due)?|net\s*(payable|amount)|to\s*pay|totale|importe\s*total|summe|gesamt|zu\s*zahlen|montant|à\s*payer|\btotal\b)/i;
+  const notTotal = /sub\s*-?\s*total|total\s*(vat|tax|items?|qty|quantity|discount|savings?)|vat\s*total|tax\s*total|tips?\s*total|change|cashback|before\s*tax/i;
+  let amount = null;
+  lines.forEach((l, i) => {
+    if (!totalRe.test(l) || notTotal.test(l)) return;
+    let vals = moneyIn(l.replace(/\b(19|20)\d{2}-\d{2}-\d{2}\b|\b\d{1,2}[./]\d{1,2}[./]\d{2,4}\b|\b\d{1,2}:\d{2}\b/g, ' '));
+    if (!vals.length && lines[i + 1]) vals = moneyIn(lines[i + 1]);
+    vals = vals.filter(v => v > 0 && v < 1e7);
+    if (vals.length) { const v = Math.max(...vals); if (amount == null || v >= amount) amount = v; }
+  });
+  if (amount == null) {
+    const priced = lines.filter(l => /\d[.,]\d{2}\b/.test(l) && !/\b\d{1,2}:\d{2}\b/.test(l)).flatMap(l => moneyIn(l)).filter(v => v > 0 && v < 1e7);
+    if (priced.length) amount = Math.max(...priced);
+  }
+  // currency: the code or symbol used most
+  const counts = {};
+  RECEIPT_CURRENCIES.forEach(c => { const n = (text.match(new RegExp('\\b' + c + '\\b', 'g')) || []).length; if (n) counts[c] = (counts[c] || 0) + n * 2; });
+  CURRENCY_SYMBOLS.forEach(([re, c]) => { const n = (text.match(new RegExp(re.source, re.flags.includes('g') ? re.flags : re.flags + 'g')) || []).length; if (n && !(c === 'USD' && Object.keys(counts).some(k => /S\$|HK\$|A\$|C\$/.test(text)))) counts[c] = (counts[c] || 0) + n; });
+  const currency = Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0] || '';
+  const dates = findDates(text);
+  const date = dates.length ? dates[0].date : '';
+  // name: the first proper line at the top
+  const skip = /receipt|invoice|tax|welcome|thank|date|time|tel\b|phone|vat|trn|gst|order|table|server|cashier|www\.|@|^\W*$|^[\d\s\-:/.,]+$/i;
+  const vendor = (lines.slice(0, 8).find(l => /[a-z]{3,}/i.test(l) && !skip.test(l) && l.length <= 60) || '').replace(/\s{2,}/g, ' ').trim();
+  const t = text.toLowerCase();
+  const category =
+    /atm|cash\s*with?draw|withdrawal/.test(t) ? 'Cash withdrawal' :
+    /dry\s*-?\s*clean|laundr|cleaners/.test(t) ? 'Laundry' :
+    /taxi|uber|careem|lyft|bolt|cab\b|trip fare|ride|chauffeur|limousine/.test(t) ? 'Taxi' :
+    /petrol|fuel|diesel|unleaded|adnoc|enoc|shell|\besso\b|\bbp\b|car rental|hertz|avis|sixt|europcar/.test(t) ? 'Fuel' :
+    /train|rail|trenitalia|italo|eurostar|sbb|db bahn|lner|avanti/.test(t) ? 'Train' :
+    /pharmacy|farmacia|apotheke|clinic|hospital|dental|dentist|medical/.test(t) ? 'Medical' :
+    /supermarket|grocer|carrefour|spinneys|waitrose|tesco|sainsbury|lulu|coop|conad|esselunga|lidl|aldi|m&s food|whole foods/.test(t) ? 'Groceries' :
+    /restaurant|ristorante|trattoria|osteria|pizzeria|caf[eé]|coffee|bistro|brasserie|bar\b|grill|kitchen|food|covers|server|waiter|table\s*\d|service charge|tip|gratuity|dine|lounge|bakery|pasticceria/.test(t) ? 'Restaurant' :
+    /hotel|resort|room charge|folio/.test(t) ? 'Hotel' :
+    /airline|airways|emirates|baggage|excess/.test(t) ? 'Airline' :
+    /cinema|museum|ticket|tour|spa|golf|gym/.test(t) ? 'Entertainment' :
+    /boutique|fashion|store|shop|mall/.test(t) ? 'Shopping' : 'Other';
+  if (amount == null && !date) return null;
+  if (amount == null && !currency) return null;
+  const looksLikeBooking = /check[\s-]?in|check[\s-]?out|itinerar|reservation|booking (reference|confirm|number|ref)|your booking|confirmation number|e-?ticket|boarding pass/i.test(text) || lines.some(l => FLIGHT_NO.test(l));
+  return { kind: 'bill', date, amount, currency, vendor, category, looksLikeBooking };
+}
+const CURRENCY_COUNTRY = { AED: 'United Arab Emirates', GBP: 'United Kingdom', CHF: 'Switzerland', SGD: 'Singapore', PHP: 'Philippines', KES: 'Kenya', SAR: 'Saudi Arabia', QAR: 'Qatar', OMR: 'Oman', BHD: 'Bahrain', KWD: 'Kuwait', INR: 'India', JPY: 'Japan', HKD: 'Hong Kong', AUD: 'Australia', CAD: 'Canada', THB: 'Thailand', MVR: 'Maldives', LKR: 'Sri Lanka', TRY: 'Turkey', EGP: 'Egypt', ZAR: 'South Africa', USD: 'United States' };
+
 // ---- the review table ----
 let importItems = [];   // everything found in the PDFs so far, waiting for approval
 const esc = v => String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
@@ -3726,6 +3837,19 @@ function importStatus(it) {
     });
     if (clash.size) return { code: 'overlap', text: 'Overlaps: the ledger has him in ' + [...clash.values()].map(t => tripPlaceLabel(t) + ' ' + t.entry + ' \u2192 ' + t.exit).join('; ') + ' that day' };
     if (it.yearGuessed) return { code: 'confirm', text: 'A boarding pass doesn\u2019t print the year \u2014 it was taken as ' + it.depDate.slice(0, 4) + '. Check the date, then add it.' };
+    return { code: 'new', text: 'New' };
+  }
+  if (it.kind === 'bill') {
+    if (!it.date) return { code: 'check', text: 'The date couldn\u2019t be read \u2014 fill it in' };
+    if (it.amount == null || it.amount === '') return { code: 'check', text: 'The total couldn\u2019t be read \u2014 fill it in' };
+    const amt = Number(it.amount);
+    if (expenses.some(e => e.date === it.date && e.amount != null && Math.abs(Number(e.amount) - amt) < 0.01)) return { code: 'already', text: 'Already in the ledger' };
+    const t = findTripForDay(parseDate(it.date));
+    if (it.looksLikeBooking) return { code: 'confirm', text: 'This looks like a booking rather than a bill, and its stay or flight couldn\u2019t be read \u2014 check the date and total before adding it as a bill.' };
+    if (!t) return it.country ? { code: 'confirm', text: 'No trip in the ledger on ' + it.date + ' \u2014 adding this bill starts a receipt-only trip in ' + it.country + ' that day.' } : { code: 'check', text: 'No trip in the ledger that day \u2014 pick the country' };
+    if (it.country && t.country !== it.country) return { code: 'overlap', text: 'Overlaps: the ledger has him in ' + tripPlaceLabel(t) + ' that day, but you chose ' + it.country + '.' };
+    if (it.currency && CURRENCY_COUNTRY[it.currency] && it.currency !== 'USD' && CURRENCY_COUNTRY[it.currency] !== t.country && !(it.currency === 'EUR'))
+      return { code: 'confirm', text: 'The bill is in ' + it.currency + ' but the ledger has him in ' + t.country + ' that day \u2014 is that right?' };
     return { code: 'new', text: 'New' };
   }
   if (!it.checkIn || !it.checkOut || !it.country) return { code: 'check', text: it.country ? 'Fill in the dates' : 'Pick the country' };
@@ -3762,11 +3886,15 @@ function renderImportReview() {
   const textIn = (field, i, v, ph, w) => '<input type="text" data-imp-field="' + field + '" data-imp-i="' + i + '" value="' + esc(v) + '" placeholder="' + ph + '" style="width:' + (w || 110) + 'px;">';
   const rows = held.map(it => {
     const i = importItems.indexOf(it);
-    const details = it.kind === 'flight'
+    const BILL_TYPES = ['Hotel', 'Restaurant', 'Taxi', 'Train', 'Shopping', 'Groceries', 'Medical', 'Entertainment', 'Fuel', 'Airline', 'Cash withdrawal', 'Laundry', 'Other'];
+    const details = it.kind === 'bill'
+      ? '<b>\u{1F9FE}</b> ' + textIn('vendor', i, it.vendor, 'name', 170) + ' <select data-imp-field="category" data-imp-i="' + i + '">' + BILL_TYPES.map(c => '<option' + (c === it.category ? ' selected' : '') + '>' + c + '</option>').join('') + '</select> ' +
+        textIn('amount', i, it.amount == null ? '' : it.amount, 'total', 80) + textIn('currency', i, it.currency, 'cur.', 50) + ' ' + countrySelect('country', i, it.country)
+      : it.kind === 'flight'
       ? '<b>✈ ' + esc(it.flightNo || 'Flight') + '</b> ' + textIn('depCity', i, it.depCity, 'from city') + countrySelect('from', i, it.from) +
         ' → ' + textIn('arrCity', i, it.arrCity, 'to city') + countrySelect('to', i, it.to)
       : '<b>\u{1F3E8} ' + textIn('hotel', i, it.hotel, 'hotel name', 190) + '</b> ' + textIn('city', i, it.city, 'city') + countrySelect('country', i, it.country);
-    const dates = it.kind === 'flight'
+    const dates = it.kind === 'bill' ? dateIn('date', i, it.date) : it.kind === 'flight'
       ? dateIn('depDate', i, it.depDate) + (it.arrDate && it.arrDate !== it.depDate ? ' <span class="hint">arr.</span> ' + dateIn('arrDate', i, it.arrDate) : '')
       : '<span class="hint">in</span> ' + dateIn('checkIn', i, it.checkIn) + ' <span class="hint">out</span> ' + dateIn('checkOut', i, it.checkOut);
     const canAdd = it._status.code === 'overlap' || it._status.code === 'confirm';
@@ -3784,6 +3912,8 @@ function renderImportReview() {
     it[inp.dataset.impField] = inp.value;
     if (it.kind === 'flight' && inp.dataset.impField === 'depDate' && (!it.arrDate || it.arrDate < inp.value)) it.arrDate = inp.value;
     if (/Date$/.test(inp.dataset.impField)) it.yearGuessed = false;
+    if (it.kind === 'bill') it.looksLikeBooking = false;
+    if (it.kind === 'bill' && inp.dataset.impField === 'currency') it.currency = inp.value.toUpperCase();
     // once corrected so that it's new and clash-free, it goes straight in like the rest
     const st = importStatus(it);
     if (st.code === 'new') { await addImportedItems([it]); return; }
@@ -3794,13 +3924,25 @@ function renderImportReview() {
   el.querySelectorAll('[data-imp-no]').forEach(b => b.onclick = () => { importItems[+b.dataset.impNo].discarded = true; renderImportReview(); });
 }
 
+const IMPORT_TYPES = /\.(pdf|jpe?g|png|gif|bmp|webp|heic|heif|tiff?|html?|mht|eml|txt)$/i;
+function importFileKind(f) {
+  const n = f.name || '', t = f.type || '';
+  if (/\.pdf$/i.test(n) || t === 'application/pdf') return 'pdf';
+  if (/\.(html?|mht)$/i.test(n) || t === 'text/html') return 'html';
+  if (/\.eml$/i.test(n) || t === 'message/rfc822') return 'eml';
+  if (/\.txt$/i.test(n) || t === 'text/plain') return 'text';
+  if (/^image\//.test(t) || /\.(jpe?g|png|gif|bmp|webp|heic|heif|tiff?)$/i.test(n)) return 'image';
+  return '';
+}
+function importKey(o) {
+  return o.kind === 'flight' ? 'f' + o.depDate + o.from + o.to : o.kind === 'hotel' ? 'h' + o.checkIn + o.checkOut + o.country : 'b' + o.date + '|' + o.amount + '|' + o.currency;
+}
 async function readPdfFiles(files) {
   const status = document.getElementById('pdfImportStatus');
   status.style.color = 'var(--ink-soft)';
-  status.textContent = 'Opening the PDF reader…';
+  status.textContent = 'Opening the reader…';
   let lib;
-  const isPdf = f => /\.pdf$/i.test(f.name) || f.type === 'application/pdf';
-  if (files.some(isPdf)) {
+  if (files.some(f => importFileKind(f) === 'pdf')) {
     try { lib = await loadPdfJs(); } catch (e) { status.textContent = e.message; status.style.color = 'var(--red)'; return; }
   }
   const progress = name => m => {
@@ -3808,91 +3950,106 @@ async function readPdfFiles(files) {
     else if (/loading/.test(m.status) && m.progress != null) status.textContent = 'Preparing text recognition (first time only)… ' + Math.round(m.progress * 100) + '%';
     else if (/recogni/.test(m.status) && m.progress != null) status.textContent = 'Reading ' + name + '… ' + Math.round(m.progress * 100) + '%';
   };
+  // flights and hotel stays first; if a document has neither, it's read as a bill / receipt
+  const readItems = lines => {
+    const r = parseBookingText(lines, WORLD_COUNTRIES);
+    const items = r.flights.concat(r.hotels);
+    if (items.length) return items;
+    const bill = parseReceipt(lines);
+    return bill ? [bill] : [];
+  };
   const unread = [], fresh = [];
   for (const f of files) {
     status.textContent = 'Reading ' + f.name + '…';
-    if (!isPdf(f)) {
-      // a photo (e.g. a boarding pass taken with the phone camera): recognise its text on this device
-      try {
-        const lines = await ocrImageToLines(f, progress(f.name));
-        const r = parseBookingText(lines, WORLD_COUNTRIES), items = r.flights.concat(r.hotels);
-        if (!items.length) {
-          const text = lines.join('\n');
-          unread.push({ name: f.name, pages: 1, chars: text.replace(/\s/g, '').length, text, viaOcr: true, photo: true,
-            dates: findDates(text).length, airports: lines.reduce((n, l) => n + airportsIn(l, true).length, 0), flightNos: lines.filter(l => FLIGHT_NO.test(l)).length,
-            inOut: /check[\s-]?in|arrival/i.test(text) && /check[\s-]?out|departure/i.test(text) });
-          continue;
-        }
-        items.forEach(it => { it.file = f.name; it.viaOcr = true; if (!fresh.some(o => o.kind === it.kind && (o.depDate || o.checkIn) === (it.depDate || it.checkIn) && (o.from || o.country) === (it.from || it.country))) fresh.push(it); });
-      } catch (e) { unread.push({ name: f.name, error: e && e.message || 'text recognition failed', picture: true }); }
-      continue;
-    }
+    const kind = importFileKind(f);
+    let lines = [], viaOcr = false, pages = 1, items = [];
     try {
-      const pdf = await lib.getDocument({ data: new Uint8Array(await f.arrayBuffer()) }).promise;
-      let lines = await pdfToLines(pdf), viaOcr = false;
-      if (lines.join('').replace(/\s/g, '').length < 20) {
-        // no text layer: it's a picture, so read the words off the page image (on this computer)
-        status.textContent = 'Reading ' + f.name + ' — it\u2019s a picture, recognising the text on this computer…';
-        try {
-          lines = await ocrPdfToLines(pdf, m => {
-            if (m.status === 'page') status.textContent = 'Reading ' + f.name + ' (picture) — page ' + m.page + ' of ' + m.pages + '…';
-            else if (/loading/.test(m.status) && m.progress != null) status.textContent = 'Preparing text recognition (first time only)… ' + Math.round(m.progress * 100) + '%';
-          });
-          viaOcr = true;
-        } catch (e) { unread.push({ name: f.name, error: e && e.message || 'text recognition failed', picture: true }); continue; }
-      }
-      let r = parseBookingText(lines, WORLD_COUNTRIES);
-      let items = r.flights.concat(r.hotels);
-      if (!items.length && !viaOcr) {
-        // some PDFs carry text that can't be used (scrambled fonts, text drawn as shapes): read the page image instead
-        try {
-          status.textContent = 'Reading ' + f.name + ' a second way (recognising the page image on this device)…';
-          const ocrLines = await ocrPdfToLines(pdf, progress(f.name));
-          const r2 = parseBookingText(ocrLines, WORLD_COUNTRIES);
-          if (r2.flights.length + r2.hotels.length) { r = r2; items = r2.flights.concat(r2.hotels); viaOcr = true; }
-        } catch (e) { /* keep the first reading's explanation */ }
-      }
-      if (!items.length) {
-        // what the reader could see, so the reason is clear (all of this stays on this screen)
-        const text = lines.join('\n');
-        unread.push({ name: f.name, pages: pdf.numPages, chars: text.replace(/\s/g, '').length, text, viaOcr,
-          dates: findDates(text).length, airports: lines.reduce((n, l) => n + airportsIn(l).length, 0),
-          flightNos: lines.filter(l => FLIGHT_NO.test(l)).length,
-          inOut: /check[\s-]?in|arrival/i.test(text) && /check[\s-]?out|departure/i.test(text) });
+      if (kind === 'pdf') {
+        const pdf = await lib.getDocument({ data: new Uint8Array(await f.arrayBuffer()) }).promise;
+        pages = pdf.numPages;
+        lines = await pdfToLines(pdf);
+        if (lines.join('').replace(/\s/g, '').length < 20) {
+          // no text inside: the pages are images, so read the words off them (on this device)
+          status.textContent = 'Reading ' + f.name + ' — recognising the text on this device…';
+          lines = await ocrPdfToLines(pdf, progress(f.name)); viaOcr = true;
+        }
+        items = readItems(lines);
+        if (!items.length && !viaOcr) {
+          // text that can't be used (scrambled fonts, text drawn as shapes): read the page image instead
+          try {
+            status.textContent = 'Reading ' + f.name + ' a second way (recognising the page image on this device)…';
+            const ocrLines = await ocrPdfToLines(pdf, progress(f.name));
+            const again = readItems(ocrLines);
+            if (again.length) { items = again; lines = ocrLines; viaOcr = true; }
+          } catch (e) { /* keep the first reading's explanation */ }
+        }
+      } else if (kind === 'image') {
+        lines = await ocrImageToLines(f, progress(f.name)); viaOcr = true;
+        items = readItems(lines);
+      } else if (kind === 'html') {
+        lines = htmlToLines(await f.text()); items = readItems(lines);
+      } else if (kind === 'eml') {
+        lines = emlToLines(await f.text()); items = readItems(lines);
+      } else if (kind === 'text') {
+        lines = (await f.text()).split(/\r?\n/).map(l => l.trim()).filter(Boolean); items = readItems(lines);
+      } else {
+        unread.push({ name: f.name, error: 'this file type isn’t supported — save it as a PDF or take a photo of it', unsupported: true });
         continue;
       }
-      items.forEach(it => {
-        it.file = f.name;
-        if (viaOcr) it.viaOcr = true;
-        const key = it.kind === 'flight' ? it.depDate + it.from + it.to : it.checkIn + it.checkOut + it.country;
-        if (![...importItems, ...fresh].some(o => (o.kind === 'flight' ? o.depDate + o.from + o.to : o.checkIn + o.checkOut + o.country) === key)) fresh.push(it);
-      });
-    } catch (e) { unread.push({ name: f.name, error: e && e.message || 'could not be opened' }); }
+    } catch (e) {
+      const heic = /\.(heic|heif)$/i.test(f.name);
+      unread.push({ name: f.name, picture: kind === 'image' || viaOcr,
+        error: heic ? 'this browser can’t open iPhone HEIC photos — on the phone, choose the photo from the ledger itself, or save it as JPEG' : (e && e.message || 'could not be opened') });
+      continue;
+    }
+    if (!items.length) {
+      // what the reader could see, so the reason is clear (all of this stays on this screen)
+      const text = lines.join('\n');
+      unread.push({ name: f.name, pages, chars: text.replace(/\s/g, '').length, text, viaOcr, photo: kind === 'image',
+        dates: findDates(text).length, airports: lines.reduce((n, l) => n + airportsIn(l, true).length, 0),
+        flightNos: lines.filter(l => FLIGHT_NO.test(l)).length,
+        inOut: /check[\s-]?in|arrival/i.test(text) && /check[\s-]?out|departure/i.test(text) });
+      continue;
+    }
+    items.forEach(it => {
+      it.file = f.name;
+      if (viaOcr) it.viaOcr = true;
+      if (it.kind === 'bill') {
+        // the country: the trip the ledger has on that day, else the bill's currency
+        const t = it.date && findTripForDay(parseDate(it.date));
+        it.country = t ? t.country : (CURRENCY_COUNTRY[it.currency] && WORLD_COUNTRIES.includes(CURRENCY_COUNTRY[it.currency]) ? CURRENCY_COUNTRY[it.currency] : '');
+      }
+      const key = importKey(it);
+      if (![...importItems, ...fresh].some(o => importKey(o) === key)) fresh.push(it);
+    });
   }
   importItems = importItems.concat(fresh);
-  // flights first (a flight can explain a hotel stay abroad), then everything that's new and clash-free
-  fresh.sort((a, b) => (a.kind === 'flight' ? 0 : 1) - (b.kind === 'flight' ? 0 : 1));
+  // flights first (a flight can explain a hotel stay abroad), then hotels, then bills
+  const order = { flight: 0, hotel: 1, bill: 2 };
+  fresh.sort((a, b) => order[a.kind] - order[b.kind]);
   const already = fresh.filter(it => importStatus(it).code === 'already');
   already.forEach(it => { it.discarded = true; });
   const toAdd = [];
   fresh.forEach(it => { if (!it.discarded && importStatus(it).code === 'new') toAdd.push(it); });
   if (toAdd.length) await addImportedItems(toAdd, true);
-  const fl = toAdd.filter(i => i.kind === 'flight').length, ho = toAdd.length - fl;
+  const fl = toAdd.filter(i => i.kind === 'flight').length, ho = toAdd.filter(i => i.kind === 'hotel').length, bi = toAdd.filter(i => i.kind === 'bill').length;
   const held = fresh.filter(it => !it.added && !it.discarded).length;
-  lastImportSummary = (toAdd.length ? '<span style="color:var(--green);">✓ Added ' + fl + ' flight(s) and ' + ho + ' hotel stay(s) to the calendar.</span>' : (!unread.length && !held && !already.length ? 'Nothing new found.' : '')) +
+  const addedParts = [fl ? fl + ' flight' + (fl > 1 ? 's' : '') : '', ho ? ho + ' hotel stay' + (ho > 1 ? 's' : '') : '', bi ? bi + ' bill' + (bi > 1 ? 's' : '') : ''].filter(Boolean);
+  lastImportSummary = (toAdd.length ? '<span style="color:var(--green);">✓ Added ' + addedParts.join(', ').replace(/, ([^,]*)$/, ' and $1') + ' to the calendar.</span>' : (!unread.length && !held && !already.length ? 'Nothing new found.' : '')) +
     (already.length ? ' Skipped ' + already.length + ' already in the ledger.' : '') +
     (held ? ' <b>' + held + ' need your check below.</b>' : '') +
     (toAdd.length ? ' <button type="button" class="btn-secondary hc-btn" id="pdfImportUndo">Undo this import</button>' : '') +
     (unread.length ? '<div style="margin-top:8px; color:var(--amber);">' + unread.map((u, k) => {
       let why;
-      if (u.error && u.picture) why = 'is a <b>picture</b>, and the text recogniser couldn\u2019t run (' + esc(u.error) + ').';
-      else if (u.error) why = 'couldn\u2019t be opened (' + esc(u.error) + '). It may be password-protected or damaged.';
-      else if (u.chars < 20) why = 'is a <b>picture</b> and no words could be recognised on it (it may be too blurry or small). Add it by hand.';
-      else why = (u.photo ? 'is a photo; text was recognised (' : u.viaOcr ? 'is a <b>picture</b>; text was recognised (' : 'has text (') + u.chars.toLocaleString() + ' characters on ' + u.pages + ' page' + (u.pages === 1 ? '' : 's') + '), but no trip was recognised in it. ' +
+      if (u.unsupported) why = 'wasn’t read: ' + esc(u.error) + '.';
+      else if (u.error && u.picture) why = 'is a picture, and the text recogniser couldn’t read it (' + esc(u.error) + ').';
+      else if (u.error) why = 'couldn’t be opened (' + esc(u.error) + '). It may be password-protected or damaged.';
+      else if (u.chars < 20) why = 'has no words that could be recognised (it may be too blurry, dark or small). Try a sharper photo, or add it by hand.';
+      else why = (u.photo ? 'is a photo; text was recognised (' : u.viaOcr ? 'is a picture; text was recognised (' : 'has text (') + u.chars.toLocaleString() + ' characters' + (u.pages > 1 ? ' on ' + u.pages + ' pages' : '') + '), but no flight, hotel stay or bill total was recognised in it. ' +
         'Found: ' + u.dates + ' date(s), ' + u.airports + ' airport code(s), ' + u.flightNos + ' flight number(s)' + (u.inOut ? ', check-in/out words' : '') + '. ' +
         '<a href="#" data-unread-show="' + k + '">Show the text the reader sees</a> (only on this screen).' +
         '<pre data-unread-text="' + k + '" style="display:none; white-space:pre-wrap; max-height:260px; overflow:auto; background:var(--paper); border:1px solid var(--line); padding:8px; font-size:11px; color:var(--ink);">' + esc(u.text) + '</pre>';
-      return '\u2022 <b>' + esc(u.name) + '</b> ' + why;
+      return '• <b>' + esc(u.name) + '</b> ' + why;
     }).join('<br>') + '</div>' : '');
   status.innerHTML = lastImportSummary;
   status.querySelectorAll('[data-unread-show]').forEach(a => a.onclick = e => {
@@ -3930,12 +4087,26 @@ async function addImportedItems(chosen, isBatch) {
     extendTripToCoverBill(bill);
     it.added = true;
   });
+  chosen.filter(it => it.kind === 'bill').forEach(it => {
+    let trip = findTripForDay(parseDate(it.date));
+    if (trip && it.country && trip.country !== it.country) trip = null; // he said yes to a different country
+    if (!trip) {
+      trip = { id: uid(), country: it.country, region: mapCountryToRegion(it.country), state: '', entry: it.date, exit: it.date, note: '', evidenceOnly: true };
+      trips.push(trip);
+      resolveOverlaps(trip, true);
+    }
+    const bill = { id: uid(), tripId: trip.id, category: it.category || 'Other', vendor: it.vendor || '', date: it.date, endDate: null, fromPlace: null, toPlace: null, uaeResidence: false,
+      amount: it.amount === '' || it.amount == null ? null : Number(it.amount), currency: (it.currency || '').toUpperCase() || null };
+    expenses.push(bill);
+    autoTypeFromVendor(bill);
+    it.added = true;
+  });
   await saveTrips(); await saveExpenses();
   renderAll(); populateCloseYearSelect();
   if (!isBatch) renderImportReview();
 }
 document.getElementById('pdfImportInput').addEventListener('change', e => {
-  const files = [...e.target.files].filter(f => /\.(pdf|jpe?g|png|heic|heif|webp)$/i.test(f.name) || f.type === 'application/pdf' || /^image\//.test(f.type));
+  const files = [...e.target.files];
   if (files.length) readPdfFiles(files);
   e.target.value = ''; // so the same file can be chosen again
 });
