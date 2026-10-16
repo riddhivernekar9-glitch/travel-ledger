@@ -221,6 +221,16 @@
     <div class="cal-legend" id="calLegend"></div>
   </div>
 
+  <div class="step" id="pdfImportStep">
+    <h2>Add bookings from PDFs</h2>
+    <p class="hint" style="margin-bottom:10px;">Airline e-tickets and itineraries (Emirates, British Airways, KLM, Lufthansa&hellip;) and hotel confirmations or bills (Hilton, Marriott&hellip;).
+      <b>The files are read on this computer only &mdash; they are never uploaded or stored.</b> Nothing is added until you tick it and click Add, and nothing already in the ledger is changed.</p>
+    <label class="btn-primary" style="display:inline-block; cursor:pointer; padding:8px 14px;">Choose PDF files&hellip;
+      <input type="file" id="pdfImportInput" accept="application/pdf,.pdf" multiple style="display:none;"></label>
+    <div id="pdfImportStatus" class="hint" style="margin-top:8px;"></div>
+    <div id="pdfImportReview"></div>
+  </div>
+
   <div class="step">
     <h2>Log a day</h2>
     <p class="hint" style="margin-bottom:14px;">This is the one place for everything — a hotel booking, a restaurant bill, a taxi receipt, anything. Pick the country and date, add whatever you have, and it builds the trip evidence for you automatically. No need to think about “boarding pass vs trip vs bill” — just log what actually happened that day.</p>
@@ -3370,7 +3380,7 @@ async function cleanupLegacyUndoFields() {
 // A tab left open keeps running the old version after an update is uploaded, so new bills can
 // miss newer features (e.g. a type that didn't exist yet). Every few minutes, and whenever the
 // tab comes back into view, compare this page's version with the one that's live.
-const APP_VERSION = '2026-10-12a';
+const APP_VERSION = '2026-10-16a';
 async function checkForNewerVersion() {
   try {
     const res = await fetch(location.href.split('#')[0], { cache: 'no-store' });
@@ -3391,6 +3401,362 @@ function autoTypeFromVendor(ex) {
   if (/cash\s*with?dr[ae]w|withdrawa?l/i.test(v)) { ex.category = 'Cash withdrawal'; return true; }
   return false;
 }
+
+// ================= PDF import: reading flight and hotel confirmations =================
+// Everything here runs on this computer, in the browser. The PDF is opened locally with pdf.js,
+// turned into lines of text, and these rules look for flights and hotel stays in it. Nothing is
+// uploaded or stored; only the trips and bills you approve are saved, like anything typed by hand.
+const AIRPORTS = {
+  DXB: ['Dubai', 'United Arab Emirates'], DWC: ['Dubai', 'United Arab Emirates'], AUH: ['Abu Dhabi', 'United Arab Emirates'], SHJ: ['Sharjah', 'United Arab Emirates'],
+  LHR: ['London', 'United Kingdom'], LGW: ['London', 'United Kingdom'], LCY: ['London', 'United Kingdom'], STN: ['London', 'United Kingdom'], LTN: ['London', 'United Kingdom'],
+  MAN: ['Manchester', 'United Kingdom'], EDI: ['Edinburgh', 'United Kingdom'], GLA: ['Glasgow', 'United Kingdom'], BHX: ['Birmingham', 'United Kingdom'], BRS: ['Bristol', 'United Kingdom'], NCL: ['Newcastle', 'United Kingdom'], BFS: ['Belfast', 'United Kingdom'],
+  DUB: ['Dublin', 'Ireland'], SNN: ['Shannon', 'Ireland'],
+  FCO: ['Rome', 'Italy'], CIA: ['Rome', 'Italy'], MXP: ['Milan', 'Italy'], LIN: ['Milan', 'Italy'], BGY: ['Bergamo', 'Italy'], VCE: ['Venice', 'Italy'], NAP: ['Naples', 'Italy'], FLR: ['Florence', 'Italy'],
+  PSA: ['Pisa', 'Italy'], BLQ: ['Bologna', 'Italy'], TRN: ['Turin', 'Italy'], VRN: ['Verona', 'Italy'], BZO: ['Bolzano', 'Italy'], BRI: ['Bari', 'Italy'], BDS: ['Brindisi', 'Italy'], CTA: ['Catania', 'Italy'],
+  PMO: ['Palermo', 'Italy'], CAG: ['Cagliari', 'Italy'], OLB: ['Olbia', 'Italy'], GOA: ['Genoa', 'Italy'], TRS: ['Trieste', 'Italy'], SUF: ['Lamezia Terme', 'Italy'],
+  CDG: ['Paris', 'France'], ORY: ['Paris', 'France'], NCE: ['Nice', 'France'], LYS: ['Lyon', 'France'], MRS: ['Marseille', 'France'], GVA: ['Geneva', 'Switzerland'], ZRH: ['Zurich', 'Switzerland'], BSL: ['Basel', 'Switzerland'],
+  AMS: ['Amsterdam', 'Netherlands'], BRU: ['Brussels', 'Belgium'], LUX: ['Luxembourg', 'Luxembourg'], FRA: ['Frankfurt', 'Germany'], MUC: ['Munich', 'Germany'], BER: ['Berlin', 'Germany'], DUS: ['Dusseldorf', 'Germany'],
+  HAM: ['Hamburg', 'Germany'], STR: ['Stuttgart', 'Germany'], CGN: ['Cologne', 'Germany'], VIE: ['Vienna', 'Austria'], INN: ['Innsbruck', 'Austria'], SZG: ['Salzburg', 'Austria'], MAD: ['Madrid', 'Spain'], BCN: ['Barcelona', 'Spain'],
+  PMI: ['Palma de Mallorca', 'Spain'], AGP: ['Malaga', 'Spain'], IBZ: ['Ibiza', 'Spain'], LIS: ['Lisbon', 'Portugal'], OPO: ['Porto', 'Portugal'], FAO: ['Faro', 'Portugal'], ATH: ['Athens', 'Greece'], JMK: ['Mykonos', 'Greece'],
+  JTR: ['Santorini', 'Greece'], HER: ['Heraklion', 'Greece'], CPH: ['Copenhagen', 'Denmark'], ARN: ['Stockholm', 'Sweden'], OSL: ['Oslo', 'Norway'], HEL: ['Helsinki', 'Finland'], KEF: ['Reykjavik', 'Iceland'], WAW: ['Warsaw', 'Poland'],
+  KRK: ['Krakow', 'Poland'], PRG: ['Prague', 'Czechia'], BUD: ['Budapest', 'Hungary'], OTP: ['Bucharest', 'Romania'], SOF: ['Sofia', 'Bulgaria'], ZAG: ['Zagreb', 'Croatia'], SPU: ['Split', 'Croatia'], DBV: ['Dubrovnik', 'Croatia'],
+  LJU: ['Ljubljana', 'Slovenia'], MLA: ['Malta', 'Malta'], TLL: ['Tallinn', 'Estonia'], RIX: ['Riga', 'Latvia'], VNO: ['Vilnius', 'Lithuania'], LCA: ['Larnaca', 'Cyprus'], PFO: ['Paphos', 'Cyprus'],
+  IST: ['Istanbul', 'Turkey'], SAW: ['Istanbul', 'Turkey'], AYT: ['Antalya', 'Turkey'], TLV: ['Tel Aviv', 'Israel'], AMM: ['Amman', 'Jordan'], CAI: ['Cairo', 'Egypt'], DOH: ['Doha', 'Qatar'], BAH: ['Bahrain', 'Bahrain'],
+  KWI: ['Kuwait City', 'Kuwait'], MCT: ['Muscat', 'Oman'], RUH: ['Riyadh', 'Saudi Arabia'], JED: ['Jeddah', 'Saudi Arabia'], DMM: ['Dammam', 'Saudi Arabia'], BEY: ['Beirut', 'Lebanon'],
+  JFK: ['New York', 'United States'], LGA: ['New York', 'United States'], EWR: ['New York', 'United States'], MIA: ['Miami', 'United States'], FLL: ['Fort Lauderdale', 'United States'], MCO: ['Orlando', 'United States'],
+  TPA: ['Tampa', 'United States'], ATL: ['Atlanta', 'United States'], IAD: ['Washington', 'United States'], DCA: ['Washington', 'United States'], BWI: ['Baltimore', 'United States'], BOS: ['Boston', 'United States'],
+  PHL: ['Philadelphia', 'United States'], ORD: ['Chicago', 'United States'], DTW: ['Detroit', 'United States'], DFW: ['Dallas', 'United States'], IAH: ['Houston', 'United States'], LAX: ['Los Angeles', 'United States'],
+  SFO: ['San Francisco', 'United States'], SAN: ['San Diego', 'United States'], LAS: ['Las Vegas', 'United States'], PHX: ['Phoenix', 'United States'], SEA: ['Seattle', 'United States'], DEN: ['Denver', 'United States'],
+  CLT: ['Charlotte', 'United States'], MSP: ['Minneapolis', 'United States'], HNL: ['Honolulu', 'United States'], YYZ: ['Toronto', 'Canada'], YUL: ['Montreal', 'Canada'], YVR: ['Vancouver', 'Canada'],
+  MEX: ['Mexico City', 'Mexico'], CUN: ['Cancun', 'Mexico'], NAS: ['Nassau', 'Bahamas'], AUA: ['Aruba', 'Aruba'], SXM: ['St Maarten', 'Sint Maarten'], MBJ: ['Montego Bay', 'Jamaica'], PUJ: ['Punta Cana', 'Dominican Republic'],
+  GRU: ['Sao Paulo', 'Brazil'], GIG: ['Rio de Janeiro', 'Brazil'], EZE: ['Buenos Aires', 'Argentina'], SCL: ['Santiago', 'Chile'], BOG: ['Bogota', 'Colombia'], LIM: ['Lima', 'Peru'],
+  NBO: ['Nairobi', 'Kenya'], MBA: ['Mombasa', 'Kenya'], JNB: ['Johannesburg', 'South Africa'], CPT: ['Cape Town', 'South Africa'], ADD: ['Addis Ababa', 'Ethiopia'], LOS: ['Lagos', 'Nigeria'], CMN: ['Casablanca', 'Morocco'],
+  RAK: ['Marrakech', 'Morocco'], MRU: ['Mauritius', 'Mauritius'], SEZ: ['Seychelles', 'Seychelles'], MLE: ['Male', 'Maldives'], ZNZ: ['Zanzibar', 'Tanzania'], DAR: ['Dar es Salaam', 'Tanzania'],
+  BOM: ['Mumbai', 'India'], DEL: ['Delhi', 'India'], BLR: ['Bangalore', 'India'], MAA: ['Chennai', 'India'], COK: ['Kochi', 'India'], HYD: ['Hyderabad', 'India'], CMB: ['Colombo', 'Sri Lanka'], KHI: ['Karachi', 'Pakistan'], LHE: ['Lahore', 'Pakistan'],
+  SIN: ['Singapore', 'Singapore'], KUL: ['Kuala Lumpur', 'Malaysia'], BKK: ['Bangkok', 'Thailand'], HKT: ['Phuket', 'Thailand'], CGK: ['Jakarta', 'Indonesia'], DPS: ['Bali', 'Indonesia'], MNL: ['Manila', 'Philippines'],
+  CEB: ['Cebu', 'Philippines'], DVO: ['Davao', 'Philippines'], SGN: ['Ho Chi Minh City', 'Vietnam'], HAN: ['Hanoi', 'Vietnam'], HKG: ['Hong Kong', 'China'], PEK: ['Beijing', 'China'], PVG: ['Shanghai', 'China'],
+  ICN: ['Seoul', 'South Korea'], NRT: ['Tokyo', 'Japan'], HND: ['Tokyo', 'Japan'], KIX: ['Osaka', 'Japan'], TPE: ['Taipei', 'Taiwan'], SYD: ['Sydney', 'Australia'], MEL: ['Melbourne', 'Australia'],
+  BNE: ['Brisbane', 'Australia'], PER: ['Perth', 'Australia'], AKL: ['Auckland', 'New Zealand']
+};
+const MONTHS = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, sept: 9, oct: 10, nov: 11, dec: 12,
+  january: 1, february: 2, march: 3, april: 4, june: 6, july: 7, august: 8, september: 9, october: 10, november: 11, december: 12,
+  gen: 1, mag: 5, giu: 6, lug: 7, ago: 8, set: 9, ott: 10, dic: 12, mär: 3, mrz: 3, mai: 5, okt: 10, dez: 12, févr: 2, avr: 4, juil: 7, août: 8, déc: 12 };
+const pad2 = n => String(n).padStart(2, '0');
+const yr = y => { y = +y; return y < 100 ? 2000 + y : y; };
+const okDate = (y, m, d) => y >= 2015 && y <= 2035 && m >= 1 && m <= 12 && d >= 1 && d <= 31 ? y + '-' + pad2(m) + '-' + pad2(d) : null;
+
+// every date in a piece of text, in order: [{date:'2025-03-15', index}]
+function findDates(text) {
+  const out = [];
+  const push = (date, index) => { if (date && !out.some(o => o.index === index)) out.push({ date, index }); };
+  let m;
+  const mon = '(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|gen|mag|giu|lug|ago|set|ott|dic|mär|mrz|mai|okt|dez|févr|avr|juil|août|déc)';
+  let re = new RegExp('\\b(\\d{1,2})(?:st|nd|rd|th)?[\\s\\-\\.]?' + mon + '\\.?[,\\s\\-\\.]?\\s?(\\d{4}|\\d{2})\\b', 'gi');           // 15MAR25, 21 March 2025, 21-Mar-2025
+  while ((m = re.exec(text))) push(okDate(yr(m[3]), MONTHS[m[2].toLowerCase()], +m[1]), m.index);
+  re = new RegExp('\\b' + mon + '\\.?\\s(\\d{1,2})(?:st|nd|rd|th)?,?\\s(\\d{4})\\b', 'gi');                                   // January 18, 2026
+  while ((m = re.exec(text))) push(okDate(+m[3], MONTHS[m[1].toLowerCase()], +m[2]), m.index);
+  re = /\b(20\d{2})-(\d{2})-(\d{2})\b/g;                                                                                          // 2025-03-15
+  while ((m = re.exec(text))) push(okDate(+m[1], +m[2], +m[3]), m.index);
+  re = /\b(\d{1,2})[./](\d{1,2})[./](20\d{2}|\d{2})\b/g;                                                                           // 02.02.2026, 21/03/2025 (day first; US order only if the day can't be a month)
+  while ((m = re.exec(text))) { let d = +m[1], mo = +m[2]; if (mo > 12 && d <= 12) [d, mo] = [mo, d]; push(okDate(yr(m[3]), mo, d), m.index); }
+  return out.sort((a, b) => a.index - b.index);
+}
+
+// three-letter airport codes in a line: "(DXB)" anywhere, or bare "DXB" on a line that has a flight number
+const FLIGHT_NO = /\b(EK|EY|QR|BA|VS|KL|AF|LH|LX|OS|AZ|IB|TP|SN|SK|AY|EI|TK|A3|OA|CY|FZ|G9|WY|GF|SV|MS|RJ|ME|KQ|ET|SA|QF|SQ|CX|NH|JL|KE|OZ|MH|TG|GA|PR|5J|VN|AI|UK|UL|AA|UA|DL|B6|AS|WN|AC|AM|CM|LA|AV|U2|FR|W6|VY|EW|DE|LS|BY|TOM|HV|DY|D8)\s?0*\d{1,4}\b/;
+function airportsIn(line) {
+  const out = [];
+  let m; const re = /\(([A-Z]{3})\)/g;
+  while ((m = re.exec(line))) if (AIRPORTS[m[1]]) out.push({ code: m[1], index: m.index });
+  if (FLIGHT_NO.test(line)) {
+    const re2 = /\b([A-Z]{3})\b/g;
+    while ((m = re2.exec(line))) if (AIRPORTS[m[1]] && !out.some(o => Math.abs(o.index - m.index) < 3)) out.push({ code: m[1], index: m.index });
+  }
+  return out.sort((a, b) => a.index - b.index);
+}
+
+function parseFlights(lines) {
+  const flights = [];
+  const seen = new Set();
+  // A segment is a flight-number line plus the few lines after it (layouts often spread one flight
+  // over several lines); without flight numbers, any 3-line window naming two airports.
+  const starts = lines.map((l, i) => FLIGHT_NO.test(l) ? i : -1).filter(i => i >= 0);
+  // The date and airports can sit up to two lines above the flight number ("Wed 13 Aug 2025",
+  // "Amsterdam (AMS) -> Aruba (AUA)", "KL 0763 ..."), so each segment starts there.
+  const useful = l => airportsIn(l).length > 0 || findDates(l).length > 0;
+  const segStart = starts.map((s, k) => {
+    const floor = k > 0 ? starts[k - 1] + 1 : 0;
+    let b = s;
+    while (b - 1 >= floor && s - (b - 1) <= 2 && useful(lines[b - 1])) b--;
+    return b;
+  });
+  const blocks = starts.length
+    ? starts.map((s, k) => lines.slice(segStart[k], Math.min(k + 1 < starts.length ? segStart[k + 1] : lines.length, s + 6)))
+    : lines.map((l, i) => lines.slice(i, i + 3));
+  blocks.forEach(block => {
+    const text = block.join('  ');
+    const codes = [];
+    block.forEach(l => airportsIn(l).forEach(a => { if (codes[codes.length - 1] !== a.code) codes.push(a.code); }));
+    if (codes.length < 2 || codes[0] === codes[1]) return;
+    const dates = findDates(text);
+    if (!dates.length) return;
+    const dep = dates[0].date;
+    let arr = dep;
+    const later = dates.find(d => d.date > dep && (Date.parse(d.date) - Date.parse(dep)) <= 2 * 86400000);
+    if (later) arr = later.date;
+    else if (/\+1\b/.test(text)) arr = new Date(Date.parse(dep) + 86400000).toISOString().slice(0, 10);
+    const key = codes[0] + codes[1] + dep;
+    if (seen.has(key)) return;
+    seen.add(key);
+    const [fromCity, fromCountry] = AIRPORTS[codes[0]], [toCity, toCountry] = AIRPORTS[codes[1]];
+    const fno = (text.match(FLIGHT_NO) || [''])[0].replace(/\s+/g, '');
+    flights.push({ kind: 'flight', depDate: dep, arrDate: arr, from: fromCountry, depCity: fromCity, to: toCountry, arrCity: toCity, fromCode: codes[0], toCode: codes[1], flightNo: fno });
+  });
+  return flights;
+}
+
+const HOTEL_BRANDS = /(hilton|conrad|waldorf|doubletree|hampton|marriott|ritz[- ]carlton|st\.? regis|sheraton|westin|le m[ée]ridien|w hotel|edition|luxury collection|renaissance|courtyard|moxy|aloft|four seasons|mandarin oriental|shangri-?la|hyatt|andaz|intercontinental|crowne plaza|holiday inn|kimpton|radisson|park inn|sofitel|novotel|pullman|fairmont|raffles|swiss[oô]tel|accor|kempinski|jumeirah|atlantis|rosewood|peninsula|aman|bulgari|armani|rocco forte|belmond|one&only|one and only|six senses|banyan tree|anantara|rotana|taj|oberoi|melia|nh hotel|best western|ibis|mercure|premier inn|hotel|resort|inn\b|suites)/i;
+function parseHotels(lines, knownCountries) {
+  const text = lines.join('\n');
+  const labelIn = /(check[\s-]?in|arrival|arriving|arrive)\b/i, labelOut = /(check[\s-]?out|departure|departing|depart)\b/i;
+  const dateNear = (re) => {
+    for (let i = 0; i < lines.length; i++) {
+      const m = re.exec(lines[i]);
+      if (!m) continue;
+      const same = findDates(lines[i].slice(m.index));
+      if (same.length) return same[0].date;
+      // table layout: a header row "Arrival  Departure  Room" over a row of values. Use this
+      // label's position among the date labels on the header to pick the matching value below.
+      const before = lines[i].slice(0, m.index);
+      const col = (labelIn.test(before) ? 1 : 0) + (labelOut.test(before) ? 1 : 0);
+      for (let j = 1; j <= 2 && i + j < lines.length; j++) {
+        const d = findDates(lines[i + j]);
+        if (d.length) return (d[col] || d[0]).date;
+      }
+    }
+    return null;
+  };
+  const cin = dateNear(labelIn), cout = dateNear(labelOut);
+  if (!cin || !cout || cout <= cin || (Date.parse(cout) - Date.parse(cin)) > 60 * 86400000) return [];
+  // a flight itinerary also says "departure"/"arrival": only treat it as a hotel if it reads like one
+  if (!HOTEL_BRANDS.test(text) && !/check[\s-]?in/i.test(text)) return [];
+  const nameLine = lines.find(l => HOTEL_BRANDS.test(l) && l.length < 90 && !/check|arriv|depart|total|tax|rate/i.test(l)) || '';
+  // country: the first country named in the document; city: the first known city named
+  let country = '', city = '';
+  let best = Infinity;
+  knownCountries.forEach(c => { const i = text.search(new RegExp('\\b' + c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'i')); if (i >= 0 && i < best) { best = i; country = c; } });
+  if (/\b(UAE|U\.A\.E\.?)\b/.test(text) && (!country || text.search(/\b(UAE|U\.A\.E)/) < best)) country = 'United Arab Emirates';
+  if (/\b(UK|U\.K\.)\b/.test(text) && !country) country = 'United Kingdom';
+  if (/\b(USA|U\.S\.A\.?)\b/.test(text) && !country) country = 'United States';
+  let cbest = Infinity;
+  Object.values(AIRPORTS).forEach(([c, co]) => { const i = text.search(new RegExp('\\b' + c + '\\b', 'i')); if (i >= 0 && i < cbest && (!country || co === country)) { cbest = i; city = c; } });
+  if (!country && city) country = Object.values(AIRPORTS).find(a => a[0] === city)[1];
+  const amt = text.match(/total[^\n\d]{0,40}?\b(AED|EUR|GBP|USD|CHF|SGD|PHP|KES|AUD|MXN|€|£|\$)\s?([\d.,]+\d)/i);
+  let amount = null, currency = '';
+  if (amt) {
+    currency = { '€': 'EUR', '£': 'GBP', '$': 'USD' }[amt[1]] || amt[1].toUpperCase();
+    const raw = amt[2];
+    amount = Number(/,\d{2}$/.test(raw) && !/\.\d{2}$/.test(raw) ? raw.replace(/\./g, '').replace(',', '.') : raw.replace(/,/g, '')) || null;
+  }
+  return [{ kind: 'hotel', hotel: nameLine.trim().slice(0, 80), city, country, checkIn: cin, checkOut: cout, amount, currency }];
+}
+
+// lines of text from one PDF -> { flights, hotels }
+function parseBookingText(lines, knownCountries) {
+  const clean = lines.map(l => l.replace(/\s+/g, ' ').trim()).filter(Boolean);
+  const hotels = parseHotels(clean, knownCountries);
+  const flights = parseFlights(clean);
+  return { flights, hotels };
+}
+// pdf.js page -> lines, by grouping text pieces that sit on the same height, left to right
+async function pdfToLines(pdf) {
+  const lines = [];
+  for (let p = 1; p <= pdf.numPages; p++) {
+    const page = await pdf.getPage(p);
+    const tc = await page.getTextContent();
+    const rows = [];
+    tc.items.forEach(it => {
+      if (!it.str || !it.str.trim()) return;
+      const y = it.transform[5], x = it.transform[4];
+      let row = rows.find(r => Math.abs(r.y - y) < 3);
+      if (!row) { row = { y, parts: [] }; rows.push(row); }
+      row.parts.push({ x, s: it.str });
+    });
+    rows.sort((a, b) => b.y - a.y).forEach(r => lines.push(r.parts.sort((a, b) => a.x - b.x).map(p => p.s).join(' ')));
+  }
+  return lines;
+}
+
+// ---- loading pdf.js only when the importer is first used (it's ~300 KB, no need on every visit) ----
+const PDFJS_SOURCES = [
+  ['https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js', 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'],
+  ['https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js', 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js']
+];
+function loadPdfJs() {
+  if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+  const tryOne = i => new Promise((resolve, reject) => {
+    if (i >= PDFJS_SOURCES.length) return reject(new Error('Could not load the PDF reader. Check your internet connection and try again.'));
+    const s = document.createElement('script');
+    s.src = PDFJS_SOURCES[i][0];
+    s.onload = () => { window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_SOURCES[i][1]; resolve(window.pdfjsLib); };
+    s.onerror = () => { s.remove(); tryOne(i + 1).then(resolve, reject); };
+    document.head.appendChild(s);
+  });
+  return tryOne(0);
+}
+
+// ---- the review table ----
+let importItems = [];   // everything found in the PDFs so far, waiting for approval
+const esc = v => String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+const DAYMS = 86400000;
+
+function importStatus(it) {
+  if (it.added) return { code: 'added', text: '✓ added' };
+  if (it.kind === 'flight') {
+    if (!it.depDate || !it.from || !it.to) return { code: 'check', text: 'Fill in the missing details' };
+    const dup = legs.find(l => l.depDate === it.depDate && l.from === it.from && l.to === it.to);
+    if (dup) return { code: 'already', text: 'Already in the ledger' };
+    // on the travel day(s) he can only be in the two countries of the flight
+    const clash = new Map();
+    [it.depDate, it.arrDate || it.depDate].forEach(ds => {
+      const d = parseDate(ds);
+      trips.filter(t => t.country !== it.from && t.country !== it.to && overlapDays(t.entry, t.exit, d, d) > 0).forEach(t => clash.set(t.id, t));
+    });
+    if (clash.size) return { code: 'overlap', text: 'Overlaps: the ledger has him in ' + [...clash.values()].map(t => tripPlaceLabel(t) + ' ' + t.entry + ' \u2192 ' + t.exit).join('; ') + ' that day' };
+    return { code: 'new', text: 'New' };
+  }
+  if (!it.checkIn || !it.checkOut || !it.country) return { code: 'check', text: it.country ? 'Fill in the dates' : 'Pick the country' };
+  if (it.checkOut <= it.checkIn) return { code: 'check', text: 'Check-out must be after check-in' };
+  const dup = expenses.find(e => e.category === 'Hotel' && e.date === it.checkIn && (e.endDate || e.date) === it.checkOut);
+  if (dup) return { code: 'already', text: 'Already in the ledger' };
+  // nights he'd be shown in another country, except a day a flight takes him into this one
+  const clashes = new Map();
+  for (let d = parseDate(it.checkIn); d < parseDate(it.checkOut); d += DAYMS) {
+    const ds = fmt(d);
+    const arriving = legs.some(l => l.to === it.country && (l.arrDate === ds || l.depDate === ds)) ||
+      importItems.some(o => o.kind === 'flight' && o.to === it.country && (o.arrDate === ds || o.depDate === ds));
+    if (arriving) continue;
+    trips.filter(t => t.country !== it.country && overlapDays(t.entry, t.exit, d, d) > 0).forEach(t => clashes.set(t.id, t));
+  }
+  if (clashes.size) return { code: 'overlap', text: 'Overlaps: ' + [...clashes.values()].map(t => tripPlaceLabel(t) + ' ' + t.entry + ' → ' + t.exit).join('; ') };
+  return { code: 'new', text: 'New' };
+}
+
+function countrySelect(field, i, value) {
+  return '<select data-imp-field="' + field + '" data-imp-i="' + i + '" style="max-width:150px;"><option value="">— country —</option>' +
+    WORLD_COUNTRIES.map(c => '<option' + (c === value ? ' selected' : '') + '>' + esc(c) + '</option>').join('') + '</select>';
+}
+function renderImportReview() {
+  const el = document.getElementById('pdfImportReview');
+  if (!importItems.length) { el.innerHTML = ''; return; }
+  importItems.forEach(it => {
+    const st = importStatus(it);
+    it._status = st;
+    if (it.checked === undefined) it.checked = st.code === 'new';   // new = ticked; overlaps and duplicates = left for you to decide
+    if (st.code === 'already' || st.code === 'added' || st.code === 'check') it.checked = false;
+  });
+  const colour = { new: 'var(--green)', already: 'var(--ink-soft)', overlap: 'var(--alert)', check: 'var(--amber)', added: 'var(--green)' };
+  const dateIn = (field, i, v) => '<input type="date" data-imp-field="' + field + '" data-imp-i="' + i + '" value="' + esc(v) + '" style="width:auto;">';
+  const textIn = (field, i, v, ph, w) => '<input type="text" data-imp-field="' + field + '" data-imp-i="' + i + '" value="' + esc(v) + '" placeholder="' + ph + '" style="width:' + (w || 110) + 'px;">';
+  const rows = importItems.map((it, i) => {
+    const st = it._status;
+    const lock = st.code === 'already' || st.code === 'added';
+    const details = it.kind === 'flight'
+      ? '<b>✈ ' + esc(it.flightNo || 'Flight') + '</b> ' + textIn('depCity', i, it.depCity, 'from city') + countrySelect('from', i, it.from) +
+        ' → ' + textIn('arrCity', i, it.arrCity, 'to city') + countrySelect('to', i, it.to)
+      : '<b>\u{1F3E8} ' + textIn('hotel', i, it.hotel, 'hotel name', 190) + '</b> ' + textIn('city', i, it.city, 'city') + countrySelect('country', i, it.country) +
+        (it.amount != null ? ' <span class="hint">' + esc(it.amount) + ' ' + esc(it.currency) + '</span>' : '');
+    const dates = it.kind === 'flight'
+      ? dateIn('depDate', i, it.depDate) + (it.arrDate && it.arrDate !== it.depDate ? ' <span class="hint">arr.</span> ' + dateIn('arrDate', i, it.arrDate) : '')
+      : '<span class="hint">in</span> ' + dateIn('checkIn', i, it.checkIn) + ' <span class="hint">out</span> ' + dateIn('checkOut', i, it.checkOut);
+    return '<tr style="border-top:1px solid var(--line);' + (lock ? ' opacity:0.55;' : '') + '">' +
+      '<td style="padding:6px 4px; vertical-align:top;"><input type="checkbox" data-imp-check="' + i + '"' + (it.checked ? ' checked' : '') + (lock ? ' disabled' : '') + '></td>' +
+      '<td style="padding:6px 4px;">' + details + '<div class="hint">' + dates + ' &middot; from ' + esc(it.file) + '</div></td>' +
+      '<td style="padding:6px 4px; vertical-align:top; color:' + colour[st.code] + '; font-size:12px; max-width:240px;">' + esc(st.text) + '</td></tr>';
+  }).join('');
+  const n = importItems.filter(it => it.checked).length;
+  el.innerHTML = '<table style="width:100%; border-collapse:collapse; font-size:13px; margin-top:10px;">' + rows + '</table>' +
+    '<div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap; align-items:center;">' +
+    '<button type="button" class="btn-primary" id="pdfImportAdd"' + (n ? '' : ' disabled') + '>Add ' + n + ' ticked item' + (n === 1 ? '' : 's') + ' to the ledger</button>' +
+    '<button type="button" class="btn-secondary" id="pdfImportClear">Clear this list</button>' +
+    '<span class="hint">Ticked by default: only items that are new and don’t clash with anything. Overlaps are left unticked for you to decide.</span></div>';
+  el.querySelectorAll('[data-imp-check]').forEach(cb => cb.onchange = () => { importItems[+cb.dataset.impCheck].checked = cb.checked; renderImportReview(); });
+  el.querySelectorAll('[data-imp-field]').forEach(inp => inp.onchange = () => {
+    const it = importItems[+inp.dataset.impI];
+    it[inp.dataset.impField] = inp.value;
+    if (it.kind === 'flight' && inp.dataset.impField === 'depDate' && (!it.arrDate || it.arrDate < inp.value)) it.arrDate = inp.value;
+    it.checked = undefined; // re-decide the tick from the new status
+    renderImportReview();
+  });
+  document.getElementById('pdfImportClear').onclick = () => { importItems = []; renderImportReview(); document.getElementById('pdfImportStatus').textContent = ''; };
+  document.getElementById('pdfImportAdd').onclick = addImportedItems;
+}
+
+async function readPdfFiles(files) {
+  const status = document.getElementById('pdfImportStatus');
+  status.style.color = 'var(--ink-soft)';
+  status.textContent = 'Opening the PDF reader…';
+  let lib;
+  try { lib = await loadPdfJs(); } catch (e) { status.textContent = e.message; status.style.color = 'var(--red)'; return; }
+  const unread = [];
+  let found = 0;
+  for (const f of files) {
+    status.textContent = 'Reading ' + f.name + '…';
+    try {
+      const pdf = await lib.getDocument({ data: new Uint8Array(await f.arrayBuffer()) }).promise;
+      const r = parseBookingText(await pdfToLines(pdf), WORLD_COUNTRIES);
+      const items = r.flights.concat(r.hotels);
+      if (!items.length) { unread.push(f.name); continue; }
+      items.forEach(it => {
+        it.file = f.name;
+        const key = it.kind === 'flight' ? it.depDate + it.from + it.to : it.checkIn + it.checkOut + it.country;
+        if (!importItems.some(o => (o.kind === 'flight' ? o.depDate + o.from + o.to : o.checkIn + o.checkOut + o.country) === key)) { importItems.push(it); found++; }
+      });
+    } catch (e) { unread.push(f.name); }
+  }
+  status.innerHTML = 'Found ' + found + ' item(s) in ' + (files.length - unread.length) + ' of ' + files.length + ' file(s). Check them below, then click Add.' +
+    (unread.length ? '<br><span style="color:var(--amber);">No flight or hotel dates could be read in: ' + unread.map(esc).join(', ') +
+      '. A scanned or photographed document has no readable text — add those by hand.</span>' : '');
+  renderImportReview();
+}
+
+async function addImportedItems() {
+  const chosen = importItems.filter(it => it.checked && !it.added);
+  if (!chosen.length) return;
+  const btn = document.getElementById('pdfImportAdd'); btn.disabled = true; btn.textContent = 'Adding…';
+  await pushUndo();
+  const flights = chosen.filter(it => it.kind === 'flight'), hotels = chosen.filter(it => it.kind === 'hotel');
+  flights.forEach(it => {
+    legs.push({ id: uid(), depDate: it.depDate, from: it.from, depCity: it.depCity || '', to: it.to, arrDate: it.arrDate || it.depDate, arrCity: it.arrCity || '' });
+    it.added = true;
+  });
+  if (flights.length) { await saveLegs(); await buildTripsFromLegs(); }
+  hotels.forEach(it => {
+    const cin = parseDate(it.checkIn), lastNight = Math.max(cin, parseDate(it.checkOut) - DAYMS);
+    // join a trip already in that country on (or right next to) these nights; otherwise start one
+    let trip = trips.find(t => !t.derived && t.country === it.country && overlapDays(t.entry, t.exit, cin - DAYMS, lastNight + DAYMS) > 0) ||
+               trips.find(t => t.country === it.country && overlapDays(t.entry, t.exit, cin - DAYMS, lastNight + DAYMS) > 0);
+    if (!trip) {
+      trip = { id: uid(), country: it.country, region: mapCountryToRegion(it.country), state: it.city || '', entry: fmt(cin), exit: fmt(lastNight), note: '', evidenceOnly: false };
+      trips.push(trip);
+    }
+    const bill = { id: uid(), tripId: trip.id, category: 'Hotel', vendor: it.hotel || 'Hotel', date: it.checkIn, endDate: it.checkOut, fromPlace: null, toPlace: null, uaeResidence: false,
+      amount: it.amount != null ? Number(it.amount) : null, currency: it.currency || null };
+    expenses.push(bill);
+    extendTripToCoverBill(bill);
+    it.added = true;
+  });
+  await saveTrips(); await saveExpenses();
+  renderAll(); populateCloseYearSelect();
+  document.getElementById('pdfImportStatus').innerHTML = '<span style="color:var(--green);">✓ Added ' + flights.length + ' flight(s) and ' + hotels.length +
+    ' hotel stay(s). Undo reverses this. The health check above the calendar will flag anything that now clashes.</span>';
+  renderImportReview();
+}
+document.getElementById('pdfImportInput').addEventListener('change', e => {
+  const files = [...e.target.files].filter(f => /\.pdf$/i.test(f.name) || f.type === 'application/pdf');
+  if (files.length) readPdfFiles(files);
+  e.target.value = ''; // so the same file can be chosen again
+});
 
 // The saved undo history is large, so it's fetched after the calendar is already showing.
 // Anything done meanwhile stays on top of it.
