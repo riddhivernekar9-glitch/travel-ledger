@@ -1630,6 +1630,7 @@ async function markPresent(country, fromStr, toStr, city) {
   renderAll(); populateCloseYearSelect();
   return true;
 }
+function escHtml(v) { return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;'); }
 function showDayDetailPanel(dateStr) {
   const dayMs = parseDate(dateStr);
   const dayTrips = trips.filter(t => overlapDays(t.entry, t.exit, dayMs, dayMs) > 0);
@@ -1648,7 +1649,8 @@ function showDayDetailPanel(dateStr) {
       const depLabel = l.depCity || l.from;
       const arrLabel = l.arrCity || l.to;
       html += '<div style="font-size:13px; padding:4px 0; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; gap:6px;">' +
-        '<span>' + l.depDate + ': ' + depLabel + ' \u2192 ' + arrLabel + (l.arrDate !== l.depDate ? ' (arr. ' + l.arrDate + ')' : '') + '</span>' +
+        '<span>' + l.depDate + ': ' + depLabel + ' \u2192 ' + arrLabel + (l.arrDate !== l.depDate ? ' (arr. ' + l.arrDate + ')' : '') +
+          (l.src ? '<br><span class="hint">&#128196; from ' + escHtml(l.src) + '</span>' : '') + '</span>' +
         '<span><button type="button" class="edit-btn" data-panel-edit-leg="' + l.id + '">edit</button>' +
         '<button type="button" class="del-btn" data-panel-del-leg="' + l.id + '" style="margin-left:4px;">remove</button></span></div>';
     });
@@ -1672,6 +1674,7 @@ function showDayDetailPanel(dateStr) {
     dayBills.forEach(ex => {
       html += '<div style="font-size:13px; padding:4px 0; border-bottom:1px solid var(--line);">' +
         ex.category + (ex.vendor ? ' \u2014 ' + ex.vendor : '') + (ex.amount != null ? ' \u2014 ' + Number(ex.amount).toFixed(2) + ' ' + (ex.currency || '') : '') +
+        (ex.src ? '<br><span class="hint">&#128196; from ' + escHtml(ex.src) + '</span>' : '') +
         ' <button type="button" class="edit-btn" data-panel-edit-bill="' + ex.id + '" style="margin-left:6px;">edit</button>' +
         '<button type="button" class="del-btn" data-panel-del-bill="' + ex.id + '" style="margin-left:4px;">remove</button></div>';
     });
@@ -2226,6 +2229,12 @@ function renderCalendar() {
       const onDark = !!cell.querySelector('.dnum[style*="#fff"]'); // flight / alert days use white text
       cell.insertAdjacentHTML('beforeend', '<div class="day-note-line" style="font-size:10px; font-style:italic; margin-top:2px; line-height:1.15; color:' + (onDark ? '#fff' : 'var(--ink)') + ';">&#128221; ' +
         dayNoteOverride.replace(/</g, '&lt;') + '</div>');
+    }
+    // A small document mark on days where something came from an imported file (hover to see which)
+    {
+      const fromFiles = legs.filter(l => l.src && (l.depDate === dateStr || l.arrDate === dateStr)).map(l => l.src)
+        .concat(expenses.filter(ex => ex.src && billCoversDay(ex, dayMs)).map(ex => ex.src));
+      if (fromFiles.length) cell.insertAdjacentHTML('beforeend', '<span class="day-src-mark" title="Added from: ' + escHtml([...new Set(fromFiles)].join(' | ')) + '" style="position:absolute; bottom:1px; right:2px; font-size:9px; line-height:1; opacity:0.85;">&#128196;</span>');
     }
     // A small pencil in the corner of EVERY day, no matter what \u2014 a trip, no trip, or a
     // genuine multi-country day \u2014 so a remark can always be added right there, on any date.
@@ -3572,7 +3581,7 @@ async function cleanupLegacyUndoFields() {
 // A tab left open keeps running the old version after an update is uploaded, so new bills can
 // miss newer features (e.g. a type that didn't exist yet). Every few minutes, and whenever the
 // tab comes back into view, compare this page's version with the one that's live.
-const APP_VERSION = '2026-10-16h';
+const APP_VERSION = '2026-10-16i';
 async function checkForNewerVersion() {
   try {
     const res = await fetch(location.href.split('#')[0], { cache: 'no-store' });
@@ -4069,9 +4078,11 @@ function flightChangesHistory(it) {
   const flewOn = legs.some(l => l.from === cand.to && (parseDate(l.depDate) === arr || parseDate(l.depDate) === arr + DAYMS));
   if (dayAfter.size && !dayAfter.has(cand.to) && !flewOn) edges.push('the ledger has him in ' + [...dayAfter].join(' + ') + ' on ' + fmtD0(arr + DAYMS) + ', the day after this flight lands in ' + cand.to);
   const similar = legs.find(l => l.from === it.from && l.to === it.to && l.depDate !== it.depDate && Math.abs(parseDate(l.depDate) - parseDate(it.depDate)) <= 5 * DAYMS);
-  const similarText = similar ? 'It looks like the ' + similar.from + ' → ' + similar.to + ' flight already logged on ' + fmtD0(parseDate(similar.depDate)) + ' (a booking or miles statement can show a different date).' : '';
+  const similarText = similar ? 'It looks like the same flight as the ' + similar.from + ' \u2192 ' + similar.to + ' already logged on ' + fmtD0(parseDate(similar.depDate)) +
+    (similar.arrDate && similar.arrDate !== similar.depDate ? ' (arriving ' + fmtD0(parseDate(similar.arrDate)) + ')' : '') + '. This file says it left on ' + fmtD0(parseDate(cand.depDate)) +
+    (cand.arrDate !== cand.depDate ? ' and arrived ' + fmtD0(parseDate(cand.arrDate)) : '') + '.' : '';
   if (!conflicts.length && !edges.length && !similar) return null;
-  if (!conflicts.length) return { text: [similarText, edges.length ? (similarText ? 'Also: ' : 'Check this flight: ') + edges.join('; ') + '.' : ''].filter(Boolean).join(' '), days: 0 };
+  if (!conflicts.length) return { text: [similarText, edges.length ? (similarText ? 'Also: ' : 'Check this flight: ') + edges.join('; ') + '.' : ''].filter(Boolean).join(' '), days: 0, similarId: similar ? similar.id : null };
   // e.g. "28 Apr – 3 May 2025: shows United Arab Emirates (bills there too); this flight would add Singapore"
   const fmtD = ms => new Date(ms).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
   const groups = [];
@@ -4083,7 +4094,7 @@ function flightChangesHistory(it) {
   const text = 'This flight would change days already on the calendar: ' + groups.slice(0, 3).map(g =>
       (g.from === g.to ? fmtD(g.from) : fmtD(g.from) + ' – ' + fmtD(g.to)) + ' shows ' + g.was.join(' + ') + (g.bills ? ' (bills there)' : '') +
       ' \u2192 would show ' + (g.will.length ? g.will.join(' + ') : 'nothing')).join('; ') + (groups.length > 3 ? '; and more' : '') + '.' + (similarText ? ' ' + similarText : '') + (edges.length ? ' Also: ' + edges.join('; ') + '.' : '');
-  return { text, days: conflicts.length };
+  return { text, days: conflicts.length, similarId: similar ? similar.id : null };
 }
 
 function importStatus(it) {
@@ -4100,7 +4111,7 @@ function importStatus(it) {
     });
     if (clash.size) return { code: 'overlap', text: 'Overlaps: the ledger has him in ' + [...clash.values()].map(t => tripPlaceLabel(t) + ' ' + t.entry + ' \u2192 ' + t.exit).join('; ') + ' that day' };
     const change = flightChangesHistory(it);
-    if (change) return { code: 'overlap', text: change.text };
+    if (change) return { code: 'overlap', text: change.text, similarId: change.similarId };
     if (it.yearGuessed) return { code: 'confirm', text: 'A boarding pass doesn\u2019t print the year \u2014 it was taken as ' + it.depDate.slice(0, 4) + '. Check the date, then add it.' };
     return { code: 'new', text: 'New' };
   }
@@ -4167,11 +4178,15 @@ function renderImportReview() {
       '<div class="hint" style="margin-top:4px;">' + dates + ' &middot; from ' + esc(it.file) + '</div>' +
       '<div style="color:' + (canAdd ? 'var(--alert)' : 'var(--amber)') + '; font-size:12px; margin-top:4px;">' + esc(it._status.text) + '</div>' +
       '<div style="margin-top:6px;">' +
-      (canAdd ? '<button type="button" class="btn-primary hc-btn" data-imp-yes="' + i + '">Yes, it’s correct — add it</button>' : '<span class="hint">Fix the details above and it will be added.</span> ') +
+      (it._status.similarId ? '<button type="button" class="btn-primary hc-btn" data-imp-replace="' + i + '">Use these dates instead (correct the logged flight)</button>' : '') +
+      (canAdd ? '<button type="button" class="' + (it._status.similarId ? 'btn-secondary' : 'btn-primary') + ' hc-btn" data-imp-yes="' + i + '">' + (it._status.similarId ? 'It’s a different flight — add it too' : 'Yes, it’s correct — add it') + '</button>' : '<span class="hint">Fix the details above and it will be added.</span> ') +
       '<button type="button" class="btn-secondary hc-btn" data-imp-no="' + i + '">No, discard</button></div></div>';
   }).join('');
+  const lookAlikes = held.filter(it => it._status.similarId);
   el.innerHTML = '<div class="print-note-box" style="margin-top:10px; border-color:var(--alert); background:#f5e0ee; color:#631253;">' +
-    '<strong>' + held.length + ' item(s) need your check</strong> — they clash with what’s already in the ledger or a detail is uncertain, so they were <u>not</u> added yet.' + rows + '</div>';
+    '<strong>' + held.length + ' item(s) need your check</strong> — they clash with what’s already in the ledger or a detail is uncertain, so they were <u>not</u> added yet.' +
+    (lookAlikes.length > 1 ? '<div style="margin-top:8px;"><button type="button" class="btn-primary hc-btn" id="impReplaceAll">Correct all ' + lookAlikes.length + ' look-alike flights to the file’s dates</button>' +
+      ' <span class="hint">Each logged flight takes the date in the file; nothing else changes. Undo reverses it.</span></div>' : '') + rows + '</div>';
   el.querySelectorAll('[data-imp-field]').forEach(inp => inp.onchange = async () => {
     const it = importItems[+inp.dataset.impI];
     it[inp.dataset.impField] = inp.value;
@@ -4186,6 +4201,9 @@ function renderImportReview() {
     renderImportReview();
   });
   el.querySelectorAll('[data-imp-yes]').forEach(b => b.onclick = async () => { b.disabled = true; await addImportedItems([importItems[+b.dataset.impYes]]); });
+  el.querySelectorAll('[data-imp-replace]').forEach(b => b.onclick = async () => { b.disabled = true; await correctLoggedFlights([importItems[+b.dataset.impReplace]]); });
+  const ra = document.getElementById('impReplaceAll');
+  if (ra) ra.onclick = async () => { ra.disabled = true; await correctLoggedFlights(lookAlikes); };
   el.querySelectorAll('[data-imp-no]').forEach(b => b.onclick = () => { importItems[+b.dataset.impNo].discarded = true; renderImportReview(); });
 }
 
@@ -4346,7 +4364,7 @@ async function addImportedItems(chosen, isBatch, inBatch) {
   const flights = chosen.filter(it => it.kind === 'flight'), hotels = chosen.filter(it => it.kind === 'hotel');
   flights.forEach(it => {
     it.legId = uid();
-    legs.push({ id: it.legId, depDate: it.depDate, from: it.from, depCity: it.depCity || '', to: it.to, arrDate: it.arrDate || it.depDate, arrCity: it.arrCity || '' });
+    legs.push({ id: it.legId, depDate: it.depDate, from: it.from, depCity: it.depCity || '', to: it.to, arrDate: it.arrDate || it.depDate, arrCity: it.arrCity || '', src: importSource(it) });
     it.added = true;
   });
   if (flights.length) { await saveLegs(); await buildTripsFromLegs(); }
@@ -4355,13 +4373,13 @@ async function addImportedItems(chosen, isBatch, inBatch) {
     let trip = trips.find(t => !t.derived && t.country === it.country && overlapDays(t.entry, t.exit, cin - DAYMS, lastNight + DAYMS) > 0) ||
                trips.find(t => t.country === it.country && overlapDays(t.entry, t.exit, cin - DAYMS, lastNight + DAYMS) > 0);
     if (!trip) {
-      trip = { id: uid(), country: it.country, region: mapCountryToRegion(it.country), state: it.city || '', entry: fmt(cin), exit: fmt(lastNight), note: '', evidenceOnly: false };
+      trip = { id: uid(), country: it.country, region: mapCountryToRegion(it.country), state: it.city || '', entry: fmt(cin), exit: fmt(lastNight), note: '', evidenceOnly: false, src: importSource(it) };
       trips.push(trip);
       it.createdTripId = trip.id;
     }
     it.billId = uid();
     const bill = { id: it.billId, tripId: trip.id, category: 'Hotel', vendor: it.hotel || 'Hotel', date: it.checkIn, endDate: it.checkOut, fromPlace: null, toPlace: null, uaeResidence: false,
-      amount: it.amount != null ? Number(it.amount) : null, currency: it.currency || null };
+      amount: it.amount != null ? Number(it.amount) : null, currency: it.currency || null, src: importSource(it) };
     expenses.push(bill);
     extendTripToCoverBill(bill);
     it.added = true;
@@ -4370,14 +4388,14 @@ async function addImportedItems(chosen, isBatch, inBatch) {
     let trip = findTripForDay(parseDate(it.date));
     if (trip && it.country && trip.country !== it.country) trip = null; // he said yes to a different country
     if (!trip) {
-      trip = { id: uid(), country: it.country, region: mapCountryToRegion(it.country), state: '', entry: it.date, exit: it.date, note: '', evidenceOnly: true };
+      trip = { id: uid(), country: it.country, region: mapCountryToRegion(it.country), state: '', entry: it.date, exit: it.date, note: '', evidenceOnly: true, src: importSource(it) };
       trips.push(trip);
       resolveOverlaps(trip, true);
       it.createdTripId = trip.id;
     }
     it.billId = uid();
     const bill = { id: it.billId, tripId: trip.id, category: it.category || 'Other', vendor: it.vendor || '', date: it.date, endDate: null, fromPlace: null, toPlace: null, uaeResidence: false,
-      amount: it.amount === '' || it.amount == null ? null : Number(it.amount), currency: (it.currency || '').toUpperCase() || null };
+      amount: it.amount === '' || it.amount == null ? null : Number(it.amount), currency: (it.currency || '').toUpperCase() || null, src: importSource(it) };
     expenses.push(bill);
     autoTypeFromVendor(bill);
     it.added = true;
@@ -4388,6 +4406,16 @@ async function addImportedItems(chosen, isBatch, inBatch) {
   renderAll(); populateCloseYearSelect();
   renderImportAdded();
   if (!isBatch) renderImportReview();
+}
+
+// ---- where an imported item came from, kept on the flight / bill / trip and shown on the calendar ----
+const AIRLINE_NAMES = { EK: 'Emirates', EY: 'Etihad', QR: 'Qatar Airways', BA: 'British Airways', VS: 'Virgin Atlantic', KL: 'KLM', AF: 'Air France', LH: 'Lufthansa', LX: 'Swiss', OS: 'Austrian', AZ: 'ITA Airways', IB: 'Iberia', TP: 'TAP', SN: 'Brussels Airlines', SK: 'SAS', AY: 'Finnair', EI: 'Aer Lingus', TK: 'Turkish Airlines', A3: 'Aegean', CY: 'Cyprus Airways', FZ: 'flydubai', G9: 'Air Arabia', WY: 'Oman Air', GF: 'Gulf Air', SV: 'Saudia', MS: 'EgyptAir', KQ: 'Kenya Airways', ET: 'Ethiopian', SA: 'South African', QF: 'Qantas', SQ: 'Singapore Airlines', CX: 'Cathay Pacific', NH: 'ANA', JL: 'JAL', KE: 'Korean Air', MH: 'Malaysia Airlines', TG: 'Thai Airways', PR: 'Philippine Airlines', '5J': 'Cebu Pacific', AI: 'Air India', UL: 'SriLankan', AA: 'American Airlines', UA: 'United', DL: 'Delta', B6: 'JetBlue', AC: 'Air Canada', U2: 'easyJet', FR: 'Ryanair', W6: 'Wizz Air', VY: 'Vueling', LS: 'Jet2', DY: 'Norwegian' };
+function importSource(it) {
+  const kind = /\.pdf$/i.test(it.file || '') ? 'PDF' : /\.(html?|mht)$/i.test(it.file || '') ? 'web page' : /\.eml$/i.test(it.file || '') ? 'email' : /\.txt$/i.test(it.file || '') ? 'text file' : 'photo';
+  let brand = '';
+  if (it.kind === 'flight') { const m = /^([A-Z0-9]{2})/.exec(it.flightNo || ''); brand = m && AIRLINE_NAMES[m[1]] || ''; }
+  else { const m = HOTEL_BRANDS.exec((it.kind === 'hotel' ? it.hotel : it.vendor) || ''); const b = m && m[1]; brand = b && !/^(hotel|resort|inn|suites)$/i.test(b) ? b.replace(/\b\w/g, c => c.toUpperCase()) : ''; }
+  return (brand ? brand + ' ' : '') + kind + (it.file ? ' \u00b7 ' + it.file : '') + ' \u00b7 added ' + niceDate(Date.now());
 }
 
 // ---- the list of what an import added, each with "show" and "remove" ----
@@ -4414,17 +4442,39 @@ function renderImportAdded() {
   list.sort((a, b) => byDate(a).localeCompare(byDate(b)) || order[a.kind] - order[b.kind]);
   el.innerHTML = '<div class="print-note-box" style="margin-top:10px;"><strong>Added in this session (' + list.length + ')</strong> \u2014 tap a date to see it on the calendar.' +
     list.map(it => '<div style="border-top:1px solid var(--line); padding:6px 0; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">' +
-      '<a href="#" data-imp-show="' + importItems.indexOf(it) + '" style="flex:1; min-width:220px; color:var(--ink);">' + importItemLabel(it) + '</a>' +
+      '<a href="#" data-imp-show="' + importItems.indexOf(it) + '" style="flex:1; min-width:220px; color:var(--ink);">' + importItemLabel(it) + (it.corrected ? ' <i>(corrected the flight logged on ' + esc(it.replacedOld.depDate) + ')</i>' : '') + '</a>' +
       '<span class="hint">' + esc(it.file || '') + '</span>' +
-      '<button type="button" class="btn-secondary hc-btn" data-imp-remove="' + importItems.indexOf(it) + '">Remove</button></div>').join('') + '</div>';
+      '<button type="button" class="btn-secondary hc-btn" data-imp-remove="' + importItems.indexOf(it) + '">' + (it.corrected ? 'Put old date back' : 'Remove') + '</button></div>').join('') + '</div>';
   el.querySelectorAll('[data-imp-show]').forEach(a => a.onclick = e => { e.preventDefault(); const it = importItems[+a.dataset.impShow]; showMonthOf(it.depDate || it.checkIn || it.date); });
   el.querySelectorAll('[data-imp-remove]').forEach(b => b.onclick = async () => { b.disabled = true; await removeImportedItem(importItems[+b.dataset.impRemove]); });
+}
+// The file shows a flight that's already logged with a different date (e.g. it left at 22:37 on the
+// 21st and was logged on the 22nd): give the logged flight the file's dates instead of adding a copy.
+async function correctLoggedFlights(items) {
+  const todo = items.map(it => ({ it, leg: legs.find(l => l.id === (it._status && it._status.similarId)) })).filter(x => x.leg && !x.it.added);
+  if (!todo.length) return;
+  await pushUndo();
+  todo.forEach(({ it, leg }) => {
+    it.replacedOld = { ...leg };
+    leg.depDate = it.depDate; leg.arrDate = it.arrDate || it.depDate;
+    if (!leg.depCity && it.depCity) leg.depCity = it.depCity;
+    if (!leg.arrCity && it.arrCity) leg.arrCity = it.arrCity;
+    leg.src = 'dates corrected from ' + importSource(it) + ' (was ' + it.replacedOld.depDate + ')';
+    it.legId = leg.id; it.added = true; it.corrected = true;
+    if (!importAdded.includes(it)) importAdded.push(it);
+  });
+  await saveLegs(); await buildTripsFromLegs(); await saveTrips();
+  renderAll(); populateCloseYearSelect(); renderImportAdded(); renderImportReview();
 }
 // takes back exactly what this one item added, nothing else
 async function removeImportedItem(it) {
   if (!it || !it.added || it.removed) return;
   await pushUndo();
-  if (it.kind === 'flight') {
+  if (it.corrected && it.replacedOld) {
+    const leg = legs.find(l => l.id === it.legId);
+    if (leg) Object.keys(leg).forEach(k => delete leg[k]), Object.assign(leg, it.replacedOld);
+    await saveLegs(); await buildTripsFromLegs(); await saveTrips();
+  } else if (it.kind === 'flight') {
     legs = legs.filter(l => l.id !== it.legId);
     await saveLegs(); await buildTripsFromLegs();
   } else {
