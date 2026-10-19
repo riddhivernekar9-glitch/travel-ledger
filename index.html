@@ -150,6 +150,16 @@
   <div id="loginStatus" style="margin-top:14px; color:#a3312c; font-size:13px;"></div>
 </div>
 
+<div id="unlockOverlay" style="display:none; position:fixed; inset:0; z-index:300; background:rgba(28,36,48,0.55); align-items:center; justify-content:center; padding:16px;">
+  <div style="background:var(--paper-card); border:1px solid var(--line-strong); border-radius:6px; padding:22px; max-width:420px; width:100%; font-family:'Courier New',monospace;">
+    <h3 style="margin:0 0 8px; font-weight:normal;">&#128274; Enter the ledger passphrase</h3>
+    <p class="hint" style="margin:0 0 12px;">The ledger is encrypted. Its data can only be read with the passphrase, on this device.</p>
+    <input type="password" id="unlockPass" autocomplete="current-password" style="width:100%; padding:8px; font-size:15px;" placeholder="Passphrase">
+    <label class="hint" style="display:flex; gap:6px; align-items:center; margin-top:10px;"><input type="checkbox" id="unlockRemember" checked style="width:auto;"> Remember on this device (untick on a shared computer)</label>
+    <button type="button" class="btn-primary" id="unlockBtn" style="margin-top:12px;">Unlock</button>
+    <div id="unlockMsg" class="hint" style="margin-top:8px;"></div>
+  </div>
+</div>
 <div id="appRoot" style="display:none;">
 <div id="newVersionBanner" style="display:none; position:sticky; top:0; z-index:200; background:#1f2733; color:#fff; padding:10px 14px; text-align:center; font-size:14px;">
   A newer version of the ledger is live. <button type="button" id="newVersionReload" style="margin-left:8px; font-family:inherit; cursor:pointer; padding:4px 10px;">Reload now</button>
@@ -201,6 +211,7 @@
       <input type="file" id="importFile" accept="application/json" style="display:none;">
     </div>
     <div id="backupStatus" class="hint" style="margin-top:8px;"></div>
+    <div id="encryptionBox" class="print-note-box" style="margin-top:12px;"></div>
     <p class="hint">Click <strong>Save my data</strong> before you close this page. Whenever you open a new copy
       of this tool, click <strong>Load my data</strong> first &mdash; that's the only step that carries your trips
       and bills forward.</p>
@@ -694,12 +705,12 @@ const firebaseConfig = {
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-import { getFirestore, doc, getDoc, setDoc, deleteField, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import { getFirestore, doc, getDoc, setDoc, deleteField, onSnapshot, collection, getDocs } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 const fbApp = initializeApp(firebaseConfig);
 const auth = getAuth(fbApp);
 const db = getFirestore(fbApp);
-window.__fb = { auth, db, doc, getDoc, setDoc, deleteField, onSnapshot, signOut };
+window.__fb = { auth, db, doc, getDoc, setDoc, deleteField, onSnapshot, signOut, collection, getDocs };
 
 document.getElementById('loginForm').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -830,6 +841,132 @@ function populateCountrySelects() {
   document.getElementById('expNewTripCountry').value = 'United Arab Emirates';
 }
 
+// ================= end-to-end encryption (optional, with a passphrase) =================
+// When it's on, everything is encrypted on this device before it's saved, so Google only ever stores
+// unreadable data. The key is made from the passphrase and never leaves the device; a device can
+// remember it (kept in this browser, unreadable even to this page's code). Lose the passphrase and
+// the online data can't be read, which is why a backup file is saved before encryption is turned on.
+const CRYPTO_DOC_PATH = ['ledgerData', 'crypto'];
+const CRYPTO_CHECK = 'travel-ledger-ok';
+let cryptoKey = null, cryptoInfo = null;
+const toB64 = bytes => { let s = ''; const b = new Uint8Array(bytes); for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000)); return btoa(s); };
+const fromB64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+const canZip = typeof CompressionStream !== 'undefined' && typeof DecompressionStream !== 'undefined';
+async function zipBytes(bytes, decompress) {
+  const stream = new Blob([bytes]).stream().pipeThrough(decompress ? new DecompressionStream('gzip') : new CompressionStream('gzip'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+function isEncrypted(v) { return typeof v === 'string' && /^enc[12]:/.test(v); }
+async function deriveLedgerKey(passphrase, salt, iterations) {
+  const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(passphrase), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+}
+async function encryptStr(str, key) {
+  key = key || cryptoKey;
+  let bytes = new TextEncoder().encode(str), tag = 'enc1:';
+  if (canZip) { bytes = await zipBytes(bytes); tag = 'enc2:'; }
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, bytes));
+  const out = new Uint8Array(iv.length + ct.length); out.set(iv); out.set(ct, iv.length);
+  return tag + toB64(out);
+}
+async function decryptStr(v, key) {
+  if (!isEncrypted(v)) return v;
+  key = key || cryptoKey;
+  if (!key) throw new Error('locked');
+  const raw = fromB64(v.slice(5));
+  let bytes = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: raw.slice(0, 12) }, key, raw.slice(12)));
+  if (v.startsWith('enc2:')) bytes = await zipBytes(bytes, true);
+  return new TextDecoder().decode(bytes);
+}
+async function decryptFields(obj) {
+  const out = {};
+  for (const k of Object.keys(obj || {})) out[k] = isEncrypted(obj[k]) ? await decryptStr(obj[k]) : obj[k];
+  return out;
+}
+// ---- remembering the key on this device (IndexedDB keeps it as a non-exportable key) ----
+function keyStore(mode, fn) {
+  return new Promise((resolve) => {
+    let req;
+    try { req = indexedDB.open('travel-ledger', 1); } catch (e) { return resolve(null); }
+    req.onupgradeneeded = () => req.result.createObjectStore('keys');
+    req.onerror = () => resolve(null);
+    req.onsuccess = () => {
+      try {
+        const tx = req.result.transaction('keys', mode), st = tx.objectStore('keys');
+        const r = fn(st);
+        tx.oncomplete = () => resolve(r && 'result' in r ? r.result : true);
+        tx.onerror = () => resolve(null);
+      } catch (e) { resolve(null); }
+    };
+  });
+}
+const rememberKey = (salt, key) => keyStore('readwrite', st => st.put(key, salt));
+const recallKey = salt => keyStore('readonly', st => st.get(salt));
+const forgetKeys = () => keyStore('readwrite', st => st.clear());
+async function readCryptoInfo() {
+  const { db, doc, getDoc } = window.__fb;
+  const snap = await getDoc(doc(db, ...CRYPTO_DOC_PATH));
+  return snap.exists() ? snap.data() : null;
+}
+async function keyOpens(key) { try { return (await decryptStr(cryptoInfo.check, key)) === CRYPTO_CHECK; } catch (e) { return false; } }
+// Before anything is loaded: if the ledger is encrypted, get the key (remembered, or ask for the passphrase).
+async function ensureUnlocked() {
+  if (cryptoKey) return;
+  try { cryptoInfo = await readCryptoInfo(); } catch (e) { cryptoInfo = null; }
+  if (!cryptoInfo) return;                                   // not encrypted
+  const remembered = await recallKey(cryptoInfo.salt);
+  if (remembered && await keyOpens(remembered)) { cryptoKey = remembered; return; }
+  cryptoKey = await askPassphrase();
+}
+function askPassphrase() {
+  return new Promise(resolve => {
+    const box = document.getElementById('unlockOverlay');
+    box.style.display = 'flex';
+    const input = document.getElementById('unlockPass'), msg = document.getElementById('unlockMsg'), btn = document.getElementById('unlockBtn');
+    input.value = ''; msg.textContent = ''; setTimeout(() => input.focus(), 50);
+    const go = async () => {
+      if (!input.value) return;
+      btn.disabled = true; msg.style.color = 'var(--ink-soft)'; msg.textContent = 'Unlocking…';
+      const key = await deriveLedgerKey(input.value, fromB64(cryptoInfo.salt), cryptoInfo.iter);
+      if (await keyOpens(key)) {
+        if (document.getElementById('unlockRemember').checked) await rememberKey(cryptoInfo.salt, key);
+        box.style.display = 'none'; btn.disabled = false; input.value = '';
+        resolve(key);
+      } else { btn.disabled = false; msg.style.color = 'var(--red)'; msg.textContent = 'That passphrase doesn’t open this ledger. Try again.'; input.select(); }
+    };
+    btn.onclick = go;
+    input.onkeydown = e => { if (e.key === 'Enter') go(); };
+  });
+}
+// Turning it on: encrypt everything that's stored online, including undo history and daily backups.
+async function turnOnEncryption(passphrase, remember) {
+  const { db, doc, getDoc, setDoc, collection, getDocs } = window.__fb;
+  const salt = crypto.getRandomValues(new Uint8Array(16)), iter = 310000;
+  const key = await deriveLedgerKey(passphrase, salt, iter);
+  const info = { v: 1, salt: toB64(salt), iter, check: await encryptStr(CRYPTO_CHECK, key), since: new Date().toISOString() };
+  const encDoc = async data => { const out = {}; for (const k of Object.keys(data)) out[k] = typeof data[k] === 'string' && !isEncrypted(data[k]) ? await encryptStr(data[k], key) : data[k]; return out; };
+  // read the current (plain) data first, then write the key info, then the encrypted copies
+  const sharedSnap = await getDoc(doc(db, ...SHARED_DOC_PATH)), undoSnap = await getDoc(doc(db, ...UNDO_DOC_PATH));
+  const shared = sharedSnap.exists() ? sharedSnap.data() : {}, undo = undoSnap.exists() ? undoSnap.data() : {};
+  await setDoc(doc(db, ...CRYPTO_DOC_PATH), info);
+  cryptoInfo = info; cryptoKey = key;
+  await setDoc(doc(db, ...SHARED_DOC_PATH), await encDoc(shared));
+  if (undoSnap.exists()) await setDoc(doc(db, ...UNDO_DOC_PATH), await encDoc(undo));
+  let backups = 0;
+  if (collection && getDocs) {
+    const snaps = await getDocs(collection(db, 'ledgerBackups'));
+    for (const d of snaps.docs) {
+      const data = d.data();
+      if (data.enc) continue;
+      await setDoc(doc(db, 'ledgerBackups', d.id), { enc: await encryptStr(JSON.stringify(data), key), savedAt: data.savedAt || '', reason: data.reason || '' });
+      backups++;
+    }
+  }
+  if (remember) await rememberKey(info.salt, key);
+  return backups;
+}
+
 // ================= storage (Firestore) =================
 const SHARED_DOC_PATH = ['ledgerData', 'shared'];
 let firestoreCache = null;
@@ -841,12 +978,12 @@ let undoRedoCache = null;
 async function getFirestoreDoc() {
   const { db, doc, getDoc } = window.__fb;
   const snap = await getDoc(doc(db, ...SHARED_DOC_PATH));
-  return snap.exists() ? snap.data() : {};
+  return snap.exists() ? await decryptFields(snap.data()) : {};
 }
 async function getUndoRedoDoc() {
   const { db, doc, getDoc } = window.__fb;
   const snap = await getDoc(doc(db, ...UNDO_DOC_PATH));
-  return snap.exists() ? snap.data() : {};
+  return snap.exists() ? await decryptFields(snap.data()) : {};
 }
 
 function isUndoRedoKey(key) { return key === 'undo-stack' || key === 'redo-stack'; }
@@ -870,6 +1007,7 @@ async function storageGetRaw(key) {
 // upload still raises the loud SAVE FAILED warning, and closing the page while something is
 // still uploading asks first.
 let pendingSaves = 0;
+const saveChains = {};
 function updateSaveIndicator() {
   const el = document.getElementById('lastSaved');
   if (!el) return;
@@ -884,9 +1022,13 @@ async function storageSetRaw(key, value) {
   if (isUndo) { if (undoRedoCache) undoRedoCache[key] = value; }
   else if (firestoreCache) firestoreCache[key] = value;
   pendingSaves++; updateSaveIndicator();
-  let write;
-  try { write = setDoc(doc(db, ...(isUndo ? UNDO_DOC_PATH : SHARED_DOC_PATH)), { [key]: value }, { merge: true }); }
-  catch (e) { write = Promise.reject(e); }
+  // with encryption on, the value is encrypted here first; saves of the same item stay in order
+  const prev = saveChains[key] || Promise.resolve();
+  const write = prev.catch(() => {}).then(async () => {
+    const stored = cryptoKey && typeof value === 'string' ? await encryptStr(value) : value;
+    return setDoc(doc(db, ...(isUndo ? UNDO_DOC_PATH : SHARED_DOC_PATH)), { [key]: stored }, { merge: true });
+  });
+  saveChains[key] = write;
   write.then(() => {
     storageMode = 'firebase';
     if (!isUndo) scheduleDailyBackup();
@@ -897,28 +1039,49 @@ async function storageSetRaw(key, value) {
     const msg = '⚠ SAVE FAILED (' + key + ') — your last change may NOT be saved! ' + (e && e.message ? e.message : 'Check your connection and try again.');
     if (el) { el.textContent = msg; el.style.color = '#a3312c'; el.style.fontWeight = 'bold'; }
     if (!isUndo) { try { alert(msg); } catch (e2) {} } // a lost undo copy isn't worth interrupting for
-  }).finally(() => { pendingSaves--; updateSaveIndicator(); });
+  }).finally(() => { pendingSaves--; updateSaveIndicator(); if (pendingSaves === 0) setTimeout(recheckAfterSaves, 0); });
   return true;
 }
 
+// While this device's own saves are still on their way, a snapshot can show a half-saved state
+// (e.g. the new trips but not yet the new bills); reloading from it would wipe what was just added.
+// So snapshots are only applied when nothing of ours is pending; one that arrived meanwhile is
+// checked again (fresh from the server) as soon as the last save lands.
+let syncSkipped = false;
+async function applyIncoming(incoming) {
+  if (Object.values(incoming).some(isEncrypted)) {
+    if (!cryptoKey) { await ensureUnlocked(); if (!cryptoKey) return; }   // encryption was just turned on elsewhere
+    try { incoming = await decryptFields(incoming); } catch (e) { return; }
+  }
+  if (pendingSaves > 0) { syncSkipped = true; return; }
+  const sameAsMine = firestoreCache && [...new Set([...Object.keys(incoming), ...Object.keys(firestoreCache)])]
+    .every(k => JSON.stringify(incoming[k]) === JSON.stringify(firestoreCache[k]));
+  if (sameAsMine) return; // nothing actually changed
+  firestoreCache = incoming;
+  await loadAll();
+  renderAll();
+  populateCloseYearSelect();
+  updateUndoButton();
+  updateRedoButton();
+  updateYearFilterLabel();
+  document.getElementById('loadstatus').textContent = 'live \u2014 updated just now (Firebase)';
+}
+async function recheckAfterSaves() {
+  if (!syncSkipped || pendingSaves > 0) return;
+  syncSkipped = false;
+  try {
+    const { db, doc, getDoc } = window.__fb;
+    const snap = await getDoc(doc(db, ...SHARED_DOC_PATH));
+    if (snap.exists()) await applyIncoming(snap.data());
+  } catch (e) { /* the next change will sync */ }
+}
 function startLiveSync() {
   const { db, doc, onSnapshot } = window.__fb;
   onSnapshot(doc(db, ...SHARED_DOC_PATH), (snap) => {
     if (snap.metadata && snap.metadata.hasPendingWrites) return; // the echo of our own unsaved change
     if (!snap.exists()) return;
-    const incoming = snap.data();
-    const sameAsMine = firestoreCache && [...new Set([...Object.keys(incoming), ...Object.keys(firestoreCache)])]
-      .every(k => JSON.stringify(incoming[k]) === JSON.stringify(firestoreCache[k]));
-    if (sameAsMine) return; // nothing actually changed
-    firestoreCache = incoming;
-    loadAll().then(() => {
-      renderAll();
-      populateCloseYearSelect();
-      updateUndoButton();
-      updateRedoButton();
-      updateYearFilterLabel();
-      document.getElementById('loadstatus').textContent = 'live \u2014 updated just now (Firebase)';
-    });
+    if (pendingSaves > 0) { syncSkipped = true; return; }
+    applyIncoming(snap.data());
   });
 }
 function touchLastSaved() { updateSaveIndicator(); }
@@ -972,11 +1135,10 @@ async function writeBackupNow(reason) {
   try {
     const { db, doc, setDoc } = window.__fb;
     const dateStr = new Date().toISOString().slice(0, 10);
-    await setDoc(doc(db, 'ledgerBackups', dateStr), {
-      trips, legs, expenses, ukThresh, uaeThresh, dayNotes,
-      savedAt: new Date().toISOString(),
-      reason: reason || 'auto'
-    });
+    const payload = { trips, legs, expenses, ukThresh, uaeThresh, dayNotes, savedAt: new Date().toISOString(), reason: reason || 'auto' };
+    await setDoc(doc(db, 'ledgerBackups', dateStr), cryptoKey
+      ? { enc: await encryptStr(JSON.stringify(payload)), savedAt: payload.savedAt, reason: payload.reason }
+      : payload);
   } catch (e) {
     // A missed backup should never block the app or hide itself completely — log it, but
     // don't alert, since this runs silently in the background on every save.
@@ -3568,6 +3730,53 @@ document.getElementById('closePreviewBtn').addEventListener('click', () => {
 
 // ================= events: backup =================
 document.getElementById('exportBtn').addEventListener('click', exportBackup);
+// signing out also forgets a remembered passphrase key on this device
+document.getElementById('signOutBtn').addEventListener('click', () => { forgetKeys(); cryptoKey = null; });
+
+// ---- the encryption panel (Save / load section) ----
+function renderEncryptionStatus() {
+  const box = document.getElementById('encryptionBox');
+  if (!box) return;
+  if (cryptoInfo && cryptoKey) {
+    box.style.borderColor = 'var(--green)';
+    box.innerHTML = '<strong>&#128274; Encrypted</strong> since ' + escHtml(niceDate(Date.parse(cryptoInfo.since))) + '. Everything stored online (trips, flights, bills, notes, undo history and daily backups) is unreadable without the passphrase. ' +
+      '<button type="button" class="btn-secondary hc-btn" id="encForget">Forget the passphrase on this device</button>';
+    document.getElementById('encForget').onclick = async () => { await forgetKeys(); document.getElementById('encForget').outerHTML = '<span class="hint">Forgotten: this device will ask for the passphrase next time.</span>'; };
+    return;
+  }
+  box.style.borderColor = 'var(--amber)';
+  box.innerHTML = '<strong>&#128275; Encryption is off.</strong> The data is protected by your logins, but stored readable on Google\u2019s servers. ' +
+    '<button type="button" class="btn-primary hc-btn" id="encStart">Turn on encryption\u2026</button>' +
+    '<div id="encForm" style="display:none; margin-top:10px;">' +
+    '<p class="hint" style="margin:0 0 8px;">Choose a passphrase of at least 12 characters, e.g. four unrelated words. You and the client both need it, so share it in person or by phone, never by email. <b>If it\u2019s lost, the online data can\u2019t be recovered</b>, so a backup file is saved first; keep it somewhere safe. Close the ledger on other devices before you start.</p>' +
+    '<input type="password" id="encPass1" placeholder="Passphrase" autocomplete="new-password" style="width:100%; max-width:340px; padding:7px;"><br>' +
+    '<input type="password" id="encPass2" placeholder="Type it again" autocomplete="new-password" style="width:100%; max-width:340px; padding:7px; margin-top:6px;"><br>' +
+    '<label class="hint" style="display:flex; gap:6px; align-items:flex-start; margin-top:8px;"><input type="checkbox" id="encAck" style="width:auto; margin-top:3px;"> I understand that a lost passphrase means the online data can\u2019t be read, and I\u2019ll keep the backup file safe.</label>' +
+    '<label class="hint" style="display:flex; gap:6px; align-items:center; margin-top:4px;"><input type="checkbox" id="encRemember" checked style="width:auto;"> Remember on this device</label>' +
+    '<button type="button" class="btn-primary" id="encGo" style="margin-top:8px;">Save a backup file, then encrypt</button>' +
+    '<div id="encMsg" class="hint" style="margin-top:8px;"></div></div>';
+  document.getElementById('encStart').onclick = () => { document.getElementById('encForm').style.display = 'block'; document.getElementById('encStart').style.display = 'none'; };
+  document.getElementById('encGo').onclick = async () => {
+    const p1 = document.getElementById('encPass1').value, p2 = document.getElementById('encPass2').value, msg = document.getElementById('encMsg');
+    msg.style.color = 'var(--red)';
+    if (p1.length < 12) { msg.textContent = 'Please use at least 12 characters.'; return; }
+    if (p1 !== p2) { msg.textContent = 'The two passphrases don\u2019t match.'; return; }
+    if (!document.getElementById('encAck').checked) { msg.textContent = 'Please tick the box to confirm you\u2019ve understood.'; return; }
+    const btn = document.getElementById('encGo'); btn.disabled = true;
+    if (pendingSaves > 0) { msg.style.color = 'var(--ink-soft)'; msg.textContent = 'Finishing the last save\u2026'; while (pendingSaves > 0) await new Promise(r => setTimeout(r, 300)); }
+    exportBackup();
+    msg.style.color = 'var(--ink-soft)'; msg.textContent = 'Backup file saved. Encrypting everything\u2026 (keep this page open)';
+    try {
+      const n = await turnOnEncryption(p1, document.getElementById('encRemember').checked);
+      document.getElementById('encPass1').value = document.getElementById('encPass2').value = '';
+      renderEncryptionStatus();
+      document.getElementById('encryptionBox').insertAdjacentHTML('beforeend', '<div class="hint" style="margin-top:6px; color:var(--green);">\u2713 Done. The ledger and ' + n + ' daily backup(s) are now encrypted.</div>');
+    } catch (e) {
+      btn.disabled = false; msg.style.color = 'var(--red)';
+      msg.textContent = 'Encryption didn\u2019t finish (' + (e && e.message || e) + '). Nothing was lost: reload the page and try again, or use the backup file.';
+    }
+  };
+}
 document.getElementById('undoBtn').addEventListener('click', performUndo);
 document.getElementById('redoBtn').addEventListener('click', performRedo);
 document.getElementById('tripSearch').addEventListener('input', renderTable);
@@ -3605,7 +3814,7 @@ async function cleanupLegacyUndoFields() {
 // A tab left open keeps running the old version after an update is uploaded, so new bills can
 // miss newer features (e.g. a type that didn't exist yet). Every few minutes, and whenever the
 // tab comes back into view, compare this page's version with the one that's live.
-const APP_VERSION = '2026-10-19h';
+const APP_VERSION = '2026-10-19i';
 async function checkForNewerVersion() {
   try {
     const res = await fetch(location.href.split('#')[0], { cache: 'no-store' });
@@ -4919,8 +5128,10 @@ async function initLedger() {
   const today = new Date().toISOString().slice(0, 10);
   document.getElementById('asof').value = today;
   populateCountrySelects();
+  await ensureUnlocked();
   await cleanupLegacyUndoFields();
   await loadAll();
+  renderEncryptionStatus();
   document.getElementById('loadstatus').textContent = storageMode === 'firebase' ? 'live \u2014 saved to Firebase' : 'no connection to Firebase \u2014 check your config and internet connection';
   if (trips.length === 0 && legs.length === 0 && expenses.length === 0) document.getElementById('freshFileBanner').style.display = 'block';
   renderAll();
