@@ -251,6 +251,18 @@
       <b>The files are read on this device only &mdash; they are never uploaded or stored.</b> New flights, hotel stays and bills go straight into the calendar; anything already logged (e.g. from a boarding pass) is skipped; anything that would change a day already on the calendar waits for your yes / no. Everything added is listed below with a Remove button, and Undo reverses a whole import.</p>
     <label class="btn-primary" style="display:inline-block; cursor:pointer; padding:8px 14px;">Choose files or photos&hellip;
       <input type="file" id="pdfImportInput" accept="application/pdf,.pdf,image/*,.heic,.heif,.html,.htm,.mht,.eml,.txt,text/html,text/plain,message/rfc822" multiple style="display:none;"></label>
+    <details id="pasteTextBox" style="margin-top:10px;">
+      <summary class="hint" style="cursor:pointer; color:var(--ink);">Or paste text &mdash; best for photos of bills</summary>
+      <p class="hint" style="margin:6px 0;">Most devices can copy the text out of a photo themselves, and read it better than this page can. Copy it, paste it here, and it&rsquo;s read like a file. Works for any text: a bill, a hotel folio, an email.</p>
+      <ul class="hint" style="margin:0 0 6px 18px; padding:0;">
+        <li><b>iPhone / iPad:</b> open the photo, press and hold on the text, <b>Select All</b> &rarr; <b>Copy</b> (Live Text, done on the device).</li>
+        <li><b>Mac:</b> open the photo in Photos or Preview, select the text with the cursor, <b>Copy</b> (Live Text, done on the Mac).</li>
+        <li><b>Windows 11:</b> Snipping Tool (Win+Shift+S), then <b>Text actions</b> &rarr; <b>Copy all text</b>.</li>
+        <li><b>Android:</b> Google Lens or the phone&rsquo;s &ldquo;Select text&rdquo; on the photo &rarr; <b>Copy</b>. Lens may send the photo to Google to read it, so for private documents prefer the camera button above, which reads on the phone.</li>
+      </ul>
+      <textarea id="pasteTextInput" rows="5" style="width:100%; font-family:inherit; font-size:13px;" placeholder="Paste the text here"></textarea>
+      <button type="button" class="btn-primary" id="pasteTextBtn" style="margin-top:6px;">Read pasted text</button>
+    </details>
     <div id="pdfImportStatus" class="hint" style="margin-top:8px;"></div>
     <div id="pdfImportReview"></div>
     <div id="pdfImportAdded"></div>
@@ -3581,7 +3593,7 @@ async function cleanupLegacyUndoFields() {
 // A tab left open keeps running the old version after an update is uploaded, so new bills can
 // miss newer features (e.g. a type that didn't exist yet). Every few minutes, and whenever the
 // tab comes back into view, compare this page's version with the one that's live.
-const APP_VERSION = '2026-10-19c';
+const APP_VERSION = '2026-10-19e';
 async function checkForNewerVersion() {
   try {
     const res = await fetch(location.href.split('#')[0], { cache: 'no-store' });
@@ -4154,6 +4166,137 @@ function parseReceipt(lines) {
 }
 const CURRENCY_COUNTRY = { AED: 'United Arab Emirates', GBP: 'United Kingdom', CHF: 'Switzerland', SGD: 'Singapore', PHP: 'Philippines', KES: 'Kenya', SAR: 'Saudi Arabia', QAR: 'Qatar', OMR: 'Oman', BHD: 'Bahrain', KWD: 'Kuwait', INR: 'India', JPY: 'Japan', HKD: 'Hong Kong', AUD: 'Australia', CAD: 'Canada', THB: 'Thailand', MVR: 'Maldives', LKR: 'Sri Lanka', TRY: 'Turkey', EGP: 'Egypt', ZAR: 'South Africa', USD: 'United States' };
 
+// ---- boarding-pass barcodes (read on this device) ----
+// Every boarding pass carries a barcode in the airline standard (IATA "BCBP"): airports, airline,
+// flight number and the day of the year of the flight, often also a digit of the year it was
+// issued. A barcode survives a poor photo far better than printed letters do.
+function loadZxing() {
+  if (window.ZXing) return Promise.resolve(window.ZXing);
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js';
+    s.onload = () => resolve(window.ZXing);
+    s.onerror = () => { s.remove(); reject(new Error('Could not load the barcode reader.')); };
+    document.head.appendChild(s);
+  });
+}
+async function uprightCanvas(file, maxSide) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = new Image(); img.src = url; await img.decode();
+    const k = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight));
+    const c = document.createElement('canvas');
+    c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k);
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    return c;
+  } finally { URL.revokeObjectURL(url); }
+}
+async function readBarcodes(file) {
+  const Z = await loadZxing();
+  const hints = new Map();
+  hints.set(Z.DecodeHintType.POSSIBLE_FORMATS, [Z.BarcodeFormat.PDF_417, Z.BarcodeFormat.AZTEC, Z.BarcodeFormat.QR_CODE, Z.BarcodeFormat.DATA_MATRIX]);
+  hints.set(Z.DecodeHintType.TRY_HARDER, true);
+  const reader = new Z.MultiFormatReader();
+  reader.setHints(hints);
+  for (const size of [1600, 2400, 1100, 3200]) {
+    let base;
+    try { base = await uprightCanvas(file, size); } catch (e) { return null; }
+    for (const q of [0, 1, 2, 3]) {
+      const c = q ? turnCanvas(base, q) : base;
+      for (const Bin of [Z.HybridBinarizer, Z.GlobalHistogramBinarizer]) {
+        try {
+          const bmp = new Z.BinaryBitmap(new Bin(new Z.HTMLCanvasElementLuminanceSource(c)));
+          const r = reader.decode(bmp, hints);
+          if (r && r.getText()) return r.getText();
+        } catch (e) { /* not found at this size / turn */ }
+      }
+    }
+  }
+  // An Aztec code is searched for from the middle of the picture outwards, and on a boarding pass it
+  // usually sits off to one side: look again in overlapping parts of the photo.
+  const sq = new Z.MultiFormatReader(), sqHints = new Map();
+  sqHints.set(Z.DecodeHintType.POSSIBLE_FORMATS, [Z.BarcodeFormat.AZTEC, Z.BarcodeFormat.QR_CODE, Z.BarcodeFormat.DATA_MATRIX]);
+  sqHints.set(Z.DecodeHintType.TRY_HARDER, true);
+  sq.setHints(sqHints);
+  let straight;
+  try { straight = await uprightCanvas(file, 2400); } catch (e) { return null; }
+  const tilt = (src, deg) => {
+    if (!deg) return src;
+    const a = deg * Math.PI / 180, c = document.createElement('canvas');
+    c.width = src.width; c.height = src.height;
+    const ctx = c.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+    ctx.translate(c.width / 2, c.height / 2); ctx.rotate(a); ctx.drawImage(src, -src.width / 2, -src.height / 2);
+    return c;
+  };
+  for (const deg of [0, -4, 4, -8, 8]) {
+  const base = tilt(straight, deg);
+  for (const parts of deg ? [2, 3] : [2, 3, 4]) {
+    const w = base.width / parts * 1.6, h = base.height / parts * 1.6;
+    for (let iy = 0; iy < parts; iy++) for (let ix = 0; ix < parts; ix++) {
+      const x = Math.max(0, Math.min(base.width - w, (ix + 0.5) * base.width / parts - w / 2)), y = Math.max(0, Math.min(base.height - h, (iy + 0.5) * base.height / parts - h / 2));
+      const c = document.createElement('canvas');
+      c.width = Math.round(Math.min(w, base.width)); c.height = Math.round(Math.min(h, base.height));
+      c.getContext('2d').drawImage(base, x, y, c.width, c.height, 0, 0, c.width, c.height);
+      for (const Bin of [Z.HybridBinarizer, Z.GlobalHistogramBinarizer]) {
+        try {
+          const r = sq.decode(new Z.BinaryBitmap(new Bin(new Z.HTMLCanvasElementLuminanceSource(c))), sqHints);
+          if (r && r.getText()) return r.getText();
+        } catch (e) { /* not in this part */ }
+      }
+    }
+  }
+  }
+  return null;
+}
+// IATA BCBP: "M1" + name(20) + e-ticket flag(1), then per leg: booking ref(7) from(3) to(3) airline(3)
+// flight(5) day-of-year(3) class(1) seat(4) sequence(5) status(1) size-of-extra(2 hex) extra(...).
+// The first leg's extra part can hold the issue date: last digit of the year + day of year.
+function parseBCBP(str) {
+  if (!/^M[1-4]/.test(str) || str.length < 58) return null;
+  const n = +str[1];
+  let pos = 23, issueYearDigit = null, issueDay = null;
+  const legs = [];
+  for (let k = 0; k < n && pos + 37 <= str.length; k++) {
+    const seg = str.slice(pos, pos + 37);
+    const leg = { from: seg.slice(7, 10).trim(), to: seg.slice(10, 13).trim(), airline: seg.slice(13, 16).trim(), flight: seg.slice(16, 21).trim().replace(/^0+(?=\d)/, ''), day: parseInt(seg.slice(21, 24), 10) };
+    const extra = parseInt(seg.slice(35, 37), 16) || 0;
+    const ext = str.slice(pos + 37, pos + 37 + extra);
+    if (k === 0 && ext[0] === '>') {
+      const uniq = ext.slice(4, 4 + (parseInt(ext.slice(2, 4), 16) || 0));
+      const iss = uniq.slice(3, 7);
+      if (/^\d{4}$/.test(iss)) { issueYearDigit = +iss[0]; issueDay = +iss.slice(1); }
+    }
+    if (/^[A-Z]{3}$/.test(leg.from) && /^[A-Z]{3}$/.test(leg.to) && leg.day >= 1 && leg.day <= 366) legs.push(leg);
+    pos += 37 + extra;
+  }
+  return legs.length ? { legs, issueYearDigit, issueDay } : null;
+}
+function dayOfYearToDate(y, d) { const ms = Date.UTC(y, 0, 1) + (d - 1) * DAYMS; return new Date(ms).getUTCFullYear() === y ? fmt(ms) : null; }
+function flightsFromBCBP(b) {
+  const now = new Date(), thisYear = now.getUTCFullYear(), limit = Date.now() + 2 * DAYMS;
+  let year = null;
+  if (b.issueYearDigit != null) {
+    // the most recent year ending in that digit that isn't in the future
+    for (let y = thisYear; y > thisYear - 10; y--) if (y % 10 === b.issueYearDigit && (!b.issueDay || parseDate(dayOfYearToDate(y, b.issueDay) || '9999-12-31') <= limit)) { year = y; break; }
+  }
+  return b.legs.map(l => {
+    let date, yearGuessed = false;
+    if (year != null) {
+      let y = year;
+      if (b.issueDay && l.day < b.issueDay - 7) y = year + 1;          // issued in late December for a January flight
+      date = dayOfYearToDate(y, l.day);
+    } else {
+      date = dayOfYearToDate(thisYear, l.day);
+      if (!date || parseDate(date) > limit) date = dayOfYearToDate(thisYear - 1, l.day);
+      yearGuessed = true;
+    }
+    const A = c => AIRPORTS[c] || [c, ''];
+    return { kind: 'flight', depDate: date, arrDate: date, depCity: A(l.from)[0], from: A(l.from)[1], arrCity: A(l.to)[0], to: A(l.to)[1],
+      fromCode: l.from, toCode: l.to, flightNo: l.airline + l.flight, yearGuessed, partial: !A(l.from)[1] || !A(l.to)[1], viaBarcode: true,
+      raw: 'boarding-pass barcode: ' + l.from + ' \u2192 ' + l.to + ', ' + l.airline + ' ' + l.flight + ', day ' + l.day + ' of the year' + (year != null ? ' (' + (yearGuessed ? '' : 'year from the issue date') + ')' : '') };
+  });
+}
+
 // ---- a boarding pass the photo couldn't fully show: prefill what was read, leave the rest to fill in ----
 const AIRLINE_WORDS = [[/emirat/i, 'EK'], [/britis|speedbird|\/BA\//i, 'BA'], [/etihad/i, 'EY'], [/qatar/i, 'QR'], [/lufthansa/i, 'LH'], [/\bklm\b|royal dutch/i, 'KL'], [/air france/i, 'AF'],
   [/swiss/i, 'LX'], [/\bita\b|alitalia/i, 'AZ'], [/turkish/i, 'TK'], [/virgin/i, 'VS'], [/flydubai/i, 'FZ'], [/singapore air/i, 'SQ'], [/cathay/i, 'CX'], [/american/i, 'AA'], [/united/i, 'UA'],
@@ -4277,6 +4420,7 @@ function importStatus(it) {
     if (clash.size) return { code: 'overlap', text: 'Overlaps: the ledger has him in ' + [...clash.values()].map(t => tripPlaceLabel(t) + ' ' + t.entry + ' \u2192 ' + t.exit).join('; ') + ' that day' };
     const change = flightChangesHistory(it);
     if (change) return { code: 'overlap', text: change.text, similarId: change.similarId };
+    if (it.viaBarcode && !it.yearGuessed && !it.partial) return { code: 'new', text: 'New' };
     if (it.yearGuessed || it.guessNote || it.partial) return { code: 'confirm', text: [it.guessNote || '', it.yearGuessed ? 'The pass doesn\u2019t print the year \u2014 tap the right year and it\u2019s added.' : 'Check the details, then add it.'].filter(Boolean).join(' ') };
     return { code: 'new', text: 'New' };
   }
@@ -4451,8 +4595,15 @@ async function readPdfFiles(files) {
           } catch (e) { /* keep the first reading's explanation */ }
         }
       } else if (kind === 'image') {
-        lines = await ocrImageToLines(f, progress(f.name)); viaOcr = true;
-        items = readItems(lines);
+        // a boarding pass barcode is the most reliable thing on a photo: try it first
+        let bc = null;
+        try { status.textContent = 'Reading ' + f.name + ' — looking for a boarding-pass barcode…'; bc = await readBarcodes(f); } catch (e) { bc = null; }
+        const parsed = bc && parseBCBP(bc);
+        if (parsed) { items = flightsFromBCBP(parsed); lines = []; }
+        else {
+          lines = await ocrImageToLines(f, progress(f.name)); viaOcr = true;
+          items = readItems(lines);
+        }
       } else if (kind === 'html') {
         lines = htmlToLines(await f.text()); items = readItems(lines);
       } else if (kind === 'eml') {
@@ -4611,7 +4762,8 @@ async function addImportedItems(chosen, isBatch, inBatch) {
 // ---- where an imported item came from, kept on the flight / bill / trip and shown on the calendar ----
 const AIRLINE_NAMES = { EK: 'Emirates', EY: 'Etihad', QR: 'Qatar Airways', BA: 'British Airways', VS: 'Virgin Atlantic', KL: 'KLM', AF: 'Air France', LH: 'Lufthansa', LX: 'Swiss', OS: 'Austrian', AZ: 'ITA Airways', IB: 'Iberia', TP: 'TAP', SN: 'Brussels Airlines', SK: 'SAS', AY: 'Finnair', EI: 'Aer Lingus', TK: 'Turkish Airlines', A3: 'Aegean', CY: 'Cyprus Airways', FZ: 'flydubai', G9: 'Air Arabia', WY: 'Oman Air', GF: 'Gulf Air', SV: 'Saudia', MS: 'EgyptAir', KQ: 'Kenya Airways', ET: 'Ethiopian', SA: 'South African', QF: 'Qantas', SQ: 'Singapore Airlines', CX: 'Cathay Pacific', NH: 'ANA', JL: 'JAL', KE: 'Korean Air', MH: 'Malaysia Airlines', TG: 'Thai Airways', PR: 'Philippine Airlines', '5J': 'Cebu Pacific', AI: 'Air India', UL: 'SriLankan', AA: 'American Airlines', UA: 'United', DL: 'Delta', B6: 'JetBlue', AC: 'Air Canada', U2: 'easyJet', FR: 'Ryanair', W6: 'Wizz Air', VY: 'Vueling', LS: 'Jet2', DY: 'Norwegian' };
 function importSource(it) {
-  const kind = /\.pdf$/i.test(it.file || '') ? 'PDF' : /\.(html?|mht)$/i.test(it.file || '') ? 'web page' : /\.eml$/i.test(it.file || '') ? 'email' : /\.txt$/i.test(it.file || '') ? 'text file' : 'photo';
+  if (it.file === 'pasted text.txt') return 'pasted text \u00b7 added ' + niceDate(Date.now());
+  const kind = it.viaBarcode ? 'boarding-pass barcode' : /\.pdf$/i.test(it.file || '') ? 'PDF' : /\.(html?|mht)$/i.test(it.file || '') ? 'web page' : /\.eml$/i.test(it.file || '') ? 'email' : /\.txt$/i.test(it.file || '') ? 'text file' : 'photo';
   let brand = '';
   if (it.kind === 'flight') { const m = /^([A-Z0-9]{2})/.exec(it.flightNo || ''); brand = m && AIRLINE_NAMES[m[1]] || ''; }
   else { const m = HOTEL_BRANDS.exec((it.kind === 'hotel' ? it.hotel : it.vendor) || ''); const b = m && m[1]; brand = b && !/^(hotel|resort|inn|suites)$/i.test(b) ? b.replace(/\b\w/g, c => c.toUpperCase()) : ''; }
@@ -4686,6 +4838,13 @@ async function removeImportedItem(it) {
   renderAll(); populateCloseYearSelect();
   renderImportAdded();
 }
+document.getElementById('pasteTextBtn').addEventListener('click', () => {
+  const ta = document.getElementById('pasteTextInput');
+  const text = (ta.value || '').trim();
+  if (!text) return;
+  readPdfFiles([new File([text], 'pasted text.txt', { type: 'text/plain' })]);
+  ta.value = '';
+});
 document.getElementById('pdfImportInput').addEventListener('change', e => {
   const files = [...e.target.files];
   if (files.length) readPdfFiles(files);
