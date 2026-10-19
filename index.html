@@ -809,6 +809,7 @@ let storageMode = 'none';
 let ukThresh = 16;   // old single setting; only used until UK ties are answered (see ukAssess)
 let ukTies = {};     // UK ties answers per tax year, e.g. { '2026/27': { prior, family, home, workDays, ftAbroad } }
 let uaeThresh = 90;
+let profile = {};    // his circumstances: passports, homes, registrations (see applyProfile)
 let calYear = new Date().getUTCFullYear();
 let calMonth = new Date().getUTCMonth();
 let undoStack = [];
@@ -1167,12 +1168,13 @@ async function loadAll() {
   try { const v = await storageGetRaw('reviewed-checks'); reviewedChecks = v ? JSON.parse(v) : []; } catch (e) { reviewedChecks = []; }
   try { const t = await storageGetRaw('uk-threshold'); if (t) ukThresh = Number(t); } catch (e) {}
   try { const v = await storageGetRaw('uk-ties'); ukTies = v ? JSON.parse(v) : {}; } catch (e) { ukTies = {}; }
+  try { const v = await storageGetRaw('profile'); profile = v ? JSON.parse(v) : {}; } catch (e) { profile = {}; }
   try { const t = await storageGetRaw('uae-threshold'); if (t) uaeThresh = Number(t); } catch (e) {}
   // undo/redo history is loaded separately, after the page is on screen (see loadUndoRedoLater)
 }
 
 function snapshotState() {
-  return JSON.stringify({ trips, legs, expenses, ukThresh, uaeThresh, dayNotes, ukTies });
+  return JSON.stringify({ trips, legs, expenses, ukThresh, uaeThresh, dayNotes, ukTies, profile });
 }
 
 // ================= automatic daily backups (separate from undo/redo) =================
@@ -1191,7 +1193,7 @@ async function writeBackupNow(reason) {
   try {
     const { db, doc, setDoc } = window.__fb;
     const dateStr = new Date().toISOString().slice(0, 10);
-    const payload = { trips, legs, expenses, ukThresh, uaeThresh, dayNotes, ukTies, savedAt: new Date().toISOString(), reason: reason || 'auto' };
+    const payload = { trips, legs, expenses, ukThresh, uaeThresh, dayNotes, ukTies, profile, savedAt: new Date().toISOString(), reason: reason || 'auto' };
     await setDoc(doc(db, 'ledgerBackups', dateStr), cryptoKey
       ? { enc: await encryptStr(JSON.stringify(payload)), savedAt: payload.savedAt, reason: payload.reason }
       : payload);
@@ -1274,8 +1276,8 @@ async function performUndo() {
   if (logTimer) flushChangeLog();
   logTag = 'Undo';
   trips = prev.trips; legs = prev.legs; expenses = prev.expenses; dayNotes = prev.dayNotes || {};
-  ukThresh = prev.ukThresh; uaeThresh = prev.uaeThresh; if (prev.ukTies) ukTies = prev.ukTies;
-  await Promise.all([saveTrips(), saveLegs(), saveExpenses(), saveUkThresh(ukThresh), saveUaeThresh(uaeThresh), saveDayNotes(), saveUkTies()]);
+  ukThresh = prev.ukThresh; uaeThresh = prev.uaeThresh; if (prev.ukTies) ukTies = prev.ukTies; if (prev.profile) profile = prev.profile;
+  await Promise.all([saveTrips(), saveLegs(), saveExpenses(), saveUkThresh(ukThresh), saveUaeThresh(uaeThresh), saveDayNotes(), saveUkTies(), saveProfile()]);
   await persistUndoRedo();
   renderAll();
   populateCloseYearSelect();
@@ -1301,8 +1303,8 @@ async function performRedo() {
   if (logTimer) flushChangeLog();
   logTag = 'Redo';
   trips = next.trips; legs = next.legs; expenses = next.expenses; dayNotes = next.dayNotes || {};
-  ukThresh = next.ukThresh; uaeThresh = next.uaeThresh; if (next.ukTies) ukTies = next.ukTies;
-  await Promise.all([saveTrips(), saveLegs(), saveExpenses(), saveUkThresh(ukThresh), saveUaeThresh(uaeThresh), saveDayNotes(), saveUkTies()]);
+  ukThresh = next.ukThresh; uaeThresh = next.uaeThresh; if (next.ukTies) ukTies = next.ukTies; if (next.profile) profile = next.profile;
+  await Promise.all([saveTrips(), saveLegs(), saveExpenses(), saveUkThresh(ukThresh), saveUaeThresh(uaeThresh), saveDayNotes(), saveUkTies(), saveProfile()]);
   await persistUndoRedo();
   renderAll();
   populateCloseYearSelect();
@@ -1327,7 +1329,7 @@ function updateRedoButton() {
 // bill or note that was added, removed or changed is written down with the time and the signed-in
 // account. One small entry per change, encrypted like everything else, in one document per month
 // (ledgerData/changeLog-YYYY-MM), so two devices can never overwrite each other's entries.
-const LOG_KEYS = new Set(['trips-list', 'legs-list', 'expenses-list', 'day-notes', 'uk-threshold', 'uae-threshold', 'uk-ties']);
+const LOG_KEYS = new Set(['trips-list', 'legs-list', 'expenses-list', 'day-notes', 'uk-threshold', 'uae-threshold', 'uk-ties', 'profile']);
 let logBase = null, logTimer = null, logTag = '';
 function logSetBase() { clearTimeout(logTimer); logTimer = null; logBase = snapshotState(); }
 function scheduleChangeLog() { if (logBase == null) return; clearTimeout(logTimer); logTimer = setTimeout(flushChangeLog, 2500); }
@@ -1365,6 +1367,9 @@ function describeChanges(a, b) {
     if ((na[k] || '') !== (nb[k] || '')) out.push('Day note ' + nd(k) + ': ' + (nb[k] ? '\u201c' + nb[k] + '\u201d' : 'removed'));
   });
   if (a.ukThresh !== b.ukThresh) out.push('UK day-count test changed: ' + a.ukThresh + ' \u2192 ' + b.ukThresh + ' days');
+  const pa = a.profile || {}, pb = b.profile || {};
+  const pv = v => v === true ? 'yes' : v === false ? 'no' : v == null || v === '' ? 'not answered' : v;
+  [...new Set([...Object.keys(pa), ...Object.keys(pb)])].sort().forEach(k => { if (pv(pa[k]) !== pv(pb[k])) out.push('His situation, ' + k + ': ' + pv(pa[k]) + ' \u2192 ' + pv(pb[k])); });
   const ta = a.ukTies || {}, tb = b.ukTies || {};
   [...new Set([...Object.keys(ta), ...Object.keys(tb)])].sort().forEach(k => {
     const fa = ta[k] || {}, fb = tb[k] || {};
@@ -1406,7 +1411,7 @@ async function saveUkThresh(v) { ukThresh = Number(v); await storageSetRaw('uk-t
 async function saveUaeThresh(v) { uaeThresh = Number(v); await storageSetRaw('uae-threshold', String(uaeThresh)); }
 
 function exportBackup() {
-  const payload = { exportedAt: new Date().toISOString(), trips, legs, expenses, ukThresh, uaeThresh, dayNotes, ukTies }; // dayNotes = per-day city labels; were missing from backups
+  const payload = { exportedAt: new Date().toISOString(), trips, legs, expenses, ukThresh, uaeThresh, dayNotes, ukTies, profile }; // dayNotes = per-day city labels; were missing from backups
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -1443,6 +1448,7 @@ async function importBackupFile(file) {
   await saveTrips(); await saveLegs(); await saveExpenses();
   await saveUkThresh(ukThresh); await saveUaeThresh(uaeThresh);
   if (data.ukTies && typeof data.ukTies === 'object') { ukTies = data.ukTies; await saveUkTies(); }
+  if (data.profile && typeof data.profile === 'object') { profile = data.profile; await saveProfile(); }
   renderAll(); populateCloseYearSelect();
   document.getElementById('freshFileBanner').style.display = 'none';
   document.getElementById('backupStatus').textContent = 'Loaded ' + trips.length + ' trip(s), ' + legs.length + ' flight(s), ' + expenses.length + ' bill(s) from backup dated ' + (data.exportedAt || 'unknown') + '.';
@@ -1601,6 +1607,81 @@ function ukTiesPanel(label) {
 }
 async function saveUkTies() { await storageSetRaw('uk-ties', JSON.stringify(ukTies)); }
 
+// ================= his circumstances (passports, homes, registrations) =================
+// Answers that change how a country treats him, set on each country's card. Nothing here is
+// guessed: an unanswered question leaves the card counting days as before.
+function uaeRoute() {
+  const p = profile;
+  const answered = ['gccNational', 'uaeVisa', 'uaeHome', 'uaeWork'].some(k => p[k] != null);
+  if (!answered) return uaeThresh;
+  return (p.gccNational || p.uaeVisa) && (p.uaeHome || p.uaeWork) ? 90 : 183;
+}
+const US_STATUS = { citizen: 'a US citizen', greencard: 'a green-card holder' };
+function profileAlways(key) {
+  const p = profile;
+  if (key === 'us' && US_STATUS[p.usPerson]) return 'always US tax-resident as ' + US_STATUS[p.usPerson] + ', whatever the days';
+  if (key === 'italy' && (p.italyRegistered || p.italyCentre)) return 'resident in Italy through ' + (p.italyRegistered ? 'the population register (anagrafe)' : 'his habitual home or centre of life there') + ', whatever the days';
+  if (key === 'uae' && p.uaeCentre) return 'resident in the UAE: it is his main home and centre of interests, whatever the days';
+  return '';
+}
+// adjust the cards for these answers (called at the end of computeStats)
+function applyProfile(stats) {
+  stats.forEach(s => {
+    if (s.key === 'schengen' && profile.euPassport) {
+      s.statusClass = 'ok'; s.leftCount = 0; s.free = true;
+      s.ruleLabel += ' · not limited for him';
+      s.lines = ['<span class="lim-ok">No 90/180 limit: he has an EU, EEA or Swiss passport. Days are still counted for the record.</span>'].concat(s.lines || []);
+    }
+    const always = profileAlways(s.key);
+    if (always) {
+      s.always = always; s.leftCount = 0;
+      s.statusClass = s.key === 'uae' ? 'ok' : 'over';
+      s.lines = ['<span class="' + (s.key === 'uae' ? 'lim-ok' : 'lim-hit') + '">' + escHtml(always.charAt(0).toUpperCase() + always.slice(1)) + '.</span>'].concat(s.lines || []);
+    }
+  });
+  return stats;
+}
+// the questions on each card
+const PROFILE_Q = {
+  uk: [['ukCitizen', 'British citizen (UK passport)?', 'yn', 'Doesn’t change the UK count: UK tax residence depends on days and ties, not the passport.']],
+  schengen: [['euPassport', 'Passport from an EU country, Iceland, Liechtenstein, Norway or Switzerland?', 'yn', 'With one, the 90/180 limit doesn’t apply to him.']],
+  us: [['usPerson', 'US citizen or green-card holder?', [['', 'no / not answered'], ['citizen', 'US citizen'], ['greencard', 'green-card holder']], 'Either makes him US tax-resident whatever the days.']],
+  uae: [['gccNational', 'UAE or other GCC national?', 'yn'], ['uaeVisa', 'UAE residence visa?', 'yn'], ['uaeHome', 'A home in the UAE?', 'yn'], ['uaeWork', 'A job or business in the UAE?', 'yn'],
+        ['uaeCentre', 'Is the UAE his main home and the centre of his personal and financial life?', 'yn', 'If yes he is UAE resident whatever the days.']],
+  italy: [['italyRegistered', 'Registered as living in Italy (anagrafe)?', 'yn'], ['italyCentre', 'Habitual home, or centre of his personal and family life, in Italy?', 'yn', 'Either makes him resident in Italy whatever the days.']],
+  cyprus: [['cyBusiness', 'A business, job or directorship in Cyprus?', 'yn'], ['cyHome', 'A home in Cyprus (owned or rented)?', 'yn', 'With both, 60+ days can be enough (the 60-day rule).']],
+};
+const profOpen = {};
+function profilePanel(key) {
+  const qs = PROFILE_Q[key]; if (!qs) return '';
+  const answered = qs.filter(q => profile[q[0]] != null && profile[q[0]] !== '').length;
+  const yn = [['', 'not answered'], ['yes', 'yes'], ['no', 'no']];
+  const val = f => profile[f] === true ? 'yes' : profile[f] === false ? 'no' : (profile[f] || '');
+  return '<details class="stub-hist prof-opts" data-prof-card="' + key + '"' + (profOpen[key] ? ' open' : '') + '><summary>His situation &middot; ' + answered + ' of ' + qs.length + ' answered</summary><div class="hint" style="line-height:1.5;">' +
+    qs.map(([f, label, kind, help]) => '<div style="margin-top:6px;"><b>' + escHtml(label) + '</b><br><select class="mini" data-prof="' + f + '" style="margin-top:2px;">' +
+      (kind === 'yn' ? yn : kind).map(([v, t]) => '<option value="' + v + '"' + (val(f) === v ? ' selected' : '') + '>' + t + '</option>').join('') + '</select>' +
+      (help ? '<br><i>' + escHtml(help) + '</i>' : '') + '</div>').join('') +
+    (key === 'uae' ? '<div style="margin-top:6px;"><b>Route used:</b> ' + uaeRoute() + ' days in any 12 months' + (['gccNational', 'uaeVisa', 'uaeHome', 'uaeWork'].some(k => profile[k] != null) ? ' (from these answers: 90 needs a UAE/GCC passport or a residence visa, plus a home or work in the UAE)' : ' (set below until these are answered)') + '</div>' : '') +
+    '</div></details>';
+}
+function profileSummary() {
+  const out = [], p = profile;
+  if (p.ukCitizen === true) out.push('British citizen');
+  if (p.euPassport === true) out.push('EU/EEA/Swiss passport');
+  if (US_STATUS[p.usPerson]) out.push(US_STATUS[p.usPerson].replace(/^a /, ''));
+  if (p.gccNational === true) out.push('UAE/GCC national');
+  if (p.uaeVisa === true) out.push('UAE residence visa');
+  if (p.uaeHome === true) out.push('home in the UAE');
+  if (p.uaeWork === true) out.push('job/business in the UAE');
+  if (p.uaeCentre === true) out.push('UAE is his centre of interests');
+  if (p.italyRegistered === true) out.push('registered in Italy');
+  if (p.italyCentre === true) out.push('home/centre of life in Italy');
+  if (p.cyBusiness === true) out.push('business/job in Cyprus');
+  if (p.cyHome === true) out.push('home in Cyprus');
+  return out;
+}
+async function saveProfile() { await storageSetRaw('profile', JSON.stringify(profile)); }
+
 function computeStats(asof) {
   const stats = [];
   const pm = presenceMap();
@@ -1702,24 +1783,25 @@ function computeStats(asof) {
 
   // ---- UAE: 12 consecutive months, needs AT LEAST the threshold ----
   {
+    const uaeT = uaeRoute();
     const days = countedDays(pm, region('UAE'), 'anyPart');
     const winStart = asof - 364 * DAY_MS;
     const used = inRange(days, winStart, asof).length;
     const lines = [];
-    if (used >= uaeThresh) lines.push('<span class="lim-ok">' + uaeThresh + ' days reached on ' + niceDate(nthDay(days, winStart, asof, uaeThresh)) + ' (counting from ' + niceDate(winStart) + ')</span>');
+    if (used >= uaeT) lines.push('<span class="lim-ok">' + uaeT + ' days reached on ' + niceDate(nthDay(days, winStart, asof, uaeT)) + ' (counting from ' + niceDate(winStart) + ')</span>');
     const firstInWin = inRange(days, winStart, asof)[0];
     if (firstInWin) lines.push('Oldest day in the window (' + niceDate(firstInWin) + ') drops out on ' + niceDate(firstInWin + 365 * DAY_MS) + '.');
     const history = years.map(y => {
       const n = inRange(days, yStart(y), Math.min(yEnd(y), asof)).length;
-      const h = nthDay(days, yStart(y), yEnd(y), uaeThresh);
+      const h = nthDay(days, yStart(y), yEnd(y), uaeT);
       return { label: String(y) + (y === asofYear ? ' (so far)' : ''), days: n, reached: !!h && h <= asof,
-        text: h && h <= asof ? '<b>' + uaeThresh + ' reached ' + niceDate(h) + '</b>' : (uaeThresh - n) + ' short of ' + uaeThresh };
+        text: h && h <= asof ? '<b>' + uaeT + ' reached ' + niceDate(h) + '</b>' : (uaeT - n) + ' short of ' + uaeT };
     });
-    stats.push({ key: 'uae', title: 'UAE', ruleLabel: uaeThresh + '-day route · any 12 consecutive months · any part of a day',
-      used, threshold: uaeThresh, direction: 'atLeast', leftCount: Math.max(uaeThresh - used, 0), leftText: 'more days needed',
-      statusClass: used >= uaeThresh ? 'ok' : used >= uaeThresh - 30 ? 'warn' : 'over',
-      note: (uaeThresh === 90 ? 'The 90-day route also needs UAE nationality, a residence permit or GCC nationality, plus a home or a job/business in the UAE.' : 'The 183-day route needs only the days.') + ' Window: ' + niceDate(winStart) + ' – ' + niceDate(asof) + '.',
-      lines, history, historyHead: 'Calendar year · UAE days', reachedWord: uaeThresh + ' reached' });
+    stats.push({ key: 'uae', title: 'UAE', ruleLabel: uaeT + '-day route · any 12 consecutive months · any part of a day',
+      used, threshold: uaeT, direction: 'atLeast', leftCount: Math.max(uaeT - used, 0), leftText: 'more days needed',
+      statusClass: used >= uaeT ? 'ok' : used >= uaeT - 30 ? 'warn' : 'over',
+      note: (uaeT === 90 ? 'The 90-day route also needs UAE nationality, a residence permit or GCC nationality, plus a home or a job/business in the UAE.' : 'The 183-day route needs only the days.') + ' Window: ' + niceDate(winStart) + ' – ' + niceDate(asof) + '.',
+      lines, history, historyHead: 'Calendar year · UAE days', reachedWord: uaeT + ' reached' });
   }
 
   // ---- Italy: more than half the calendar year (183, or 184 in a leap year), any part of a day ----
@@ -1770,8 +1852,9 @@ function computeStats(asof) {
       note: 'Arrival day counts as in Cyprus, the departure day as outside. From 1 Jan 2026 the 60-day rule no longer requires him to be non-resident everywhere else.',
       lines, history, historyHead: 'Year · days in Cyprus', reachedWord: 'over 183',
       resetInfo: 'New count from 1 Jan ' + (asofYear + 1) + '.' });
+    if (profile.cyBusiness && profile.cyHome) { const cyTop = otherMax(asofYear); if (used >= 60 && (!cyTop || cyTop[1] <= 183)) stats[stats.length - 1].lines.unshift('<span class="lim-ok">Meets the 60-day rule: 60+ days, a Cyprus business/job and home, and no other country over 183.</span>'); }
   }
-  return stats;
+  return applyProfile(stats);
 }
 function makeStub(s) {
   const el = document.createElement('div');
@@ -1780,7 +1863,7 @@ function makeStub(s) {
   const color = s.statusClass === 'over' ? 'var(--red)' : s.statusClass === 'warn' ? 'var(--amber)' : 'var(--green)';
   el.style.setProperty('--stub-color', color);
   const pct = Math.min((s.used / s.threshold) * 100, 100);
-  const statusText = s.direction === 'atLeast'
+  const statusText = s.always ? (s.key === 'uae' ? 'resident' : 'always resident') : s.free ? 'no limit for him' : s.direction === 'atLeast'
     ? (s.statusClass === 'ok' ? 'route met' : s.statusClass === 'warn' ? 'approaching' : 'not yet met')
     : (s.statusClass === 'over' ? 'limit reached' : s.statusClass === 'warn' ? 'approaching limit' : 'within limit');
   const hist = s.history || [];
@@ -1847,6 +1930,8 @@ function renderLimitAlerts() {
   const strip = h => String(h || '').replace(/<[^>]+>/g, '');
   const items = [];
   computeStats(today).forEach(s => {
+    if (s.always) { if (s.key !== 'uae') items.push({ lvl: 'warn', text: s.title + ': ' + s.always + '.' }); return; }
+    if (s.free) return;
     if (s.direction === 'atLeast') {
       if (s.statusClass !== 'ok') items.push({ lvl: s.statusClass === 'warn' ? 'warn' : 'info', text: s.title + ': ' + s.used + ' of ' + s.threshold + ' days in the last 12 months — ' + s.leftCount + ' more needed to qualify.' });
       return;
@@ -1989,7 +2074,13 @@ function renderPlanResult(res) {
     u.met && !b.us[i].met ? 'Substantial presence test would be met on ' + niceDate(u.metOn) + '.' : ''));
   a.italy.forEach((x, i) => row('Italy ' + x.y, b.italy[i].used, x.used, x.lim, x.hit ? 'over' : x.used >= 150 ? 'warn' : 'ok', x.hit && !b.italy[i].hit ? 'Reaches ' + x.lim + ' on ' + niceDate(x.hit) + '.' : ''));
   a.cyprus.forEach((x, i) => row('Cyprus ' + x.y + ' (departure day not counted)', b.cyprus[i].used, x.used, 183, x.hit ? 'over' : x.used >= 150 ? 'warn' : 'ok', x.hit && !b.cyprus[i].hit ? 'Over 183 on ' + niceDate(x.hit) + '.' : ''));
-  row('UAE (12 months to the end of the trip; needs ' + uaeThresh + ')', b.uae, a.uae, uaeThresh, a.uae >= uaeThresh ? 'ok' : a.uae >= uaeThresh - 30 ? 'warn' : 'over', a.uae < uaeThresh ? (uaeThresh - a.uae) + ' short of the ' + uaeThresh + '-day route.' : '');
+  row('UAE (12 months to the end of the trip; needs ' + uaeRoute() + ')', b.uae, a.uae, uaeRoute(), a.uae >= uaeRoute() ? 'ok' : a.uae >= uaeRoute() - 30 ? 'warn' : 'over', a.uae < uaeRoute() ? (uaeRoute() - a.uae) + ' short of the ' + uaeRoute() + '-day route.' : '');
+  rows.forEach(r => {
+    // his circumstances: an EU passport lifts the Schengen limit; citizenship or registration makes the count moot
+    if (/^Schengen/.test(r.title) && profile.euPassport) { r.status = 'ok'; r.note = 'No limit for him (EU, EEA or Swiss passport).'; }
+    const k = /^US /.test(r.title) ? 'us' : /^Italy /.test(r.title) ? 'italy' : '';
+    if (k && profileAlways(k)) { r.status = 'ok'; r.note = 'Already ' + profileAlways(k).replace(/^always /, '') + '.'; }
+  });
   const col = { ok: 'var(--green)', warn: 'var(--amber)', over: 'var(--red)' }, word = { ok: 'fine', warn: 'close', over: 'over' };
   const worst = rows.filter(r => r.changed || /UAE/.test(r.title)).reduce((w, r) => r.status === 'over' && !/UAE/.test(r.title) ? 'over' : w === 'over' ? w : r.status === 'warn' && !/UAE/.test(r.title) ? 'warn' : w, 'ok');
   const headline = worst === 'over' ? '⛔ This trip would take him over a limit.' : worst === 'warn' ? '⚠️ OK, but it brings him close to a limit.' : '✓ Safe: no limit is reached with this trip.';
@@ -2069,13 +2160,24 @@ function renderBoard() {
     renderAll();
   }));
 
+  ['schengen', 'us', 'uae', 'italy', 'cyprus'].forEach(k => { const st = board.querySelector('[data-key="' + k + '"]'); if (st) st.insertAdjacentHTML('beforeend', profilePanel(k)); });
+  { const ukBox = board.querySelector('[data-key="uk"] .uk-ties > div[style*="line-height"]'); if (ukBox) ukBox.insertAdjacentHTML('afterbegin', profilePanel('uk').replace(/^.*?<div class="hint" style="line-height:1.5;">/, '').replace(/<\/div><\/details>$/, '')); }
+  board.querySelectorAll('details.prof-opts').forEach(d => d.addEventListener('toggle', () => { profOpen[d.dataset.profCard] = d.open; }));
+  board.querySelectorAll('[data-prof]').forEach(inp => inp.addEventListener('change', async () => {
+    await pushUndo();
+    const v = inp.value === 'yes' ? true : inp.value === 'no' ? false : inp.value === '' ? null : inp.value;
+    profile = Object.assign({}, profile, { [inp.dataset.prof]: v });
+    if (v == null) delete profile[inp.dataset.prof];
+    await saveProfile();
+    renderAll();
+  }));
   const uaeStub = board.querySelector('[data-key="uae"]');
   const uaeSel = document.createElement('select');
   uaeSel.className = 'mini';
   uaeSel.innerHTML = '<option value="90">90-day route (permit+home+business)</option><option value="183">183-day route (treaty)</option>';
   uaeSel.value = String(uaeThresh);
   uaeSel.onchange = async () => { await saveUaeThresh(uaeSel.value); renderBoard(); };
-  uaeStub.appendChild(uaeSel);
+  if (!['gccNational', 'uaeVisa', 'uaeHome', 'uaeWork'].some(k => profile[k] != null)) uaeStub.appendChild(uaeSel);
 }
 
 // ================= calendar =================
@@ -3701,9 +3803,15 @@ async function buildAdviserReport(year, note) {
       if (n > max) { max = n; maxOn = d; }
     }
     const inYear = inRange(ae, yS, upTo).length;
-    rows.push(['UAE', 'Any 12 months ending in ' + year, (uaeThresh === 183 ? '183-day route' : '90-day route (with permit and home or work)') + '; any part of a day', max + (maxOn ? ' (highest, 12 months to ' + nd(maxOn) + ')' : ''),
-      (max >= uaeThresh ? res('route met (' + uaeThresh + '+)', 'ok') : res('route not met (' + uaeThresh + ' needed)', 'warn')) + '<br>' + inYear + ' UAE day(s) in ' + year]);
+    rows.push(['UAE', 'Any 12 months ending in ' + year, (uaeRoute() === 183 ? '183-day route' : '90-day route (with permit and home or work)') + '; any part of a day', max + (maxOn ? ' (highest, 12 months to ' + nd(maxOn) + ')' : ''),
+      (max >= uaeRoute() ? res('route met (' + uaeRoute() + '+)', 'ok') : res('route not met (' + uaeRoute() + ' needed)', 'warn')) + '<br>' + inYear + ' UAE day(s) in ' + year]);
   }
+
+  rows.forEach(r => {
+    if (r[0] === 'Schengen area' && profile.euPassport) r[4] = res('not limited: EU, EEA or Swiss passport', 'ok') + '<br>' + r[4];
+    const k = { 'United States': 'us', 'Italy': 'italy', 'UAE': 'uae' }[r[0]];
+    if (k && profileAlways(k)) r[4] = res(profileAlways(k).charAt(0).toUpperCase() + profileAlways(k).slice(1), k === 'uae' ? 'ok' : 'over') + '<br>' + r[4];
+  });
 
   // days per country in the year (any part of a day)
   const perCountry = {};
@@ -3741,6 +3849,8 @@ async function buildAdviserReport(year, note) {
   let html = '<div class="print-header"><h2>Travel day-count report &mdash; ' + year + '</h2>' +
     '<div class="meta">Prepared ' + nd(today) + (by ? ' by ' + e(by) : '') + ' &middot; ' + (yE > today ? 'year in progress, counted to ' + nd(today) : 'full year') +
     ' &middot; rules checked ' + nd(parseDate(RULES_CHECKED)) + '</div></div>';
+  const sit = profileSummary();
+  if (sit.length) html += '<div class="print-note-box"><strong>His situation:</strong> ' + e(sit.join(' \u00b7 ')) + '</div>';
   if (note) html += '<div class="print-note-box"><strong>Note:</strong> ' + e(note) + '</div>';
 
   html += H('1. Residence tests') + '<table class="ledger"><thead><tr><th>Country</th><th>Period</th><th>How days count</th><th>Days</th><th>Result</th></tr></thead><tbody>' +
@@ -4410,7 +4520,7 @@ async function cleanupLegacyUndoFields() {
 // A tab left open keeps running the old version after an update is uploaded, so new bills can
 // miss newer features (e.g. a type that didn't exist yet). Every few minutes, and whenever the
 // tab comes back into view, compare this page's version with the one that's live.
-const APP_VERSION = '2026-10-19m';
+const APP_VERSION = '2026-10-19n';
 async function checkForNewerVersion() {
   try {
     const res = await fetch(location.href.split('#')[0], { cache: 'no-store' });
