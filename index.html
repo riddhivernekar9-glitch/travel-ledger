@@ -121,6 +121,28 @@
   .print-toolbar { position: fixed; bottom: 16px; right: 16px; display: flex; gap: 8px; z-index: 10; }
   .print-toolbar button { font-family: "Courier New", monospace; font-size: 12px; padding: 9px 16px; border: 1px solid var(--ink); border-radius: 3px; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,0.15); }
 
+  /* tabs: Home / Calendar / Add / Plan / More */
+  .tabbar { position: sticky; top: 0; z-index: 50; display: flex; gap: 6px; background: var(--paper); padding: 8px 0 10px; margin: -6px 0 16px; border-bottom: 1px solid var(--line-strong); }
+  .tabbar button { flex: 1 1 0; min-width: 0; font-family: "Courier New", monospace; font-size: 13px; padding: 9px 6px; border: 1px solid var(--line-strong); background: var(--paper-card); border-radius: 3px; cursor: pointer; color: var(--ink); white-space: nowrap; position: relative; }
+  .tabbar button:hover { background: #f1ead9; }
+  .tabbar button.on { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+  .tabbar .tab-badge { display: inline-block; min-width: 17px; padding: 1px 4px; margin-left: 4px; border-radius: 9px; background: var(--red); color: #fff; font-size: 10px; line-height: 15px; vertical-align: 1px; }
+  @media (max-width: 480px) { .tabbar button { font-size: 12px; padding: 9px 2px; } .tabbar { gap: 4px; } }
+  body[data-tab-on="home"] .wrap > [data-tab]:not([data-tab~="home"]),
+  body[data-tab-on="calendar"] .wrap > [data-tab]:not([data-tab~="calendar"]),
+  body[data-tab-on="add"] .wrap > [data-tab]:not([data-tab~="add"]),
+  body[data-tab-on="plan"] .wrap > [data-tab]:not([data-tab~="plan"]),
+  body[data-tab-on="more"] .wrap > [data-tab]:not([data-tab~="more"]) { display: none !important; }
+  .home-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+  .home-actions button { font-size: 15px; padding: 14px 16px; text-align: left; }
+  .att-item { display: flex; gap: 10px; align-items: flex-start; padding: 9px 0; border-top: 1px dotted var(--line); font-family: "Courier New", monospace; font-size: 13px; line-height: 1.45; }
+  .att-item:first-child { border-top: none; }
+  .att-item .att-icon { flex: 0 0 auto; width: 20px; text-align: center; }
+  .att-item .att-text { flex: 1 1 auto; }
+  .att-item button { flex: 0 0 auto; font-family: "Courier New", monospace; font-size: 12px; padding: 5px 10px; border: 1px solid var(--line-strong); background: var(--paper); border-radius: 2px; cursor: pointer; color: var(--ink); }
+  .att-item.over .att-text { color: var(--red); } .att-item.warn .att-text { color: var(--amber); }
+  @media (max-width: 480px) { .att-item { flex-wrap: wrap; } .att-item .att-text { flex: 1 1 0; min-width: 200px; } .att-item button { margin-left: 30px; } }
+
   .footer-note { font-family: "Courier New", monospace; font-size: 10.5px; color: var(--ink-soft); line-height: 1.6; margin-top: 20px; }
 
   @media print {
@@ -131,7 +153,7 @@
   }
 </style>
 </head>
-<body>
+<body data-tab-on="home">
 
 <div id="loginScreen" style="max-width:420px; margin:80px auto; font-family:'Courier New',monospace; padding:0 20px;">
   <h1 style="font-size:22px; margin-bottom:4px;">Travel day-count ledger</h1>
@@ -175,7 +197,74 @@
     </div>
   </div>
 
-  <div class="step">
+  <nav class="tabbar" id="tabbar" aria-label="Sections">
+    <button type="button" data-go="home" class="on">Home</button>
+    <button type="button" data-go="calendar">Calendar</button>
+    <button type="button" data-go="add">Add</button>
+    <button type="button" data-go="plan">Plan</button>
+    <button type="button" data-go="more">More</button>
+  </nav>
+
+  <div id="freshFileBanner" class="step">
+    <strong style="color: var(--red); font-family:'Courier New',monospace; font-size:12px;">This file has no data in it.</strong>
+    <p class="hint">If you already have a backup, click <strong>Load my data</strong> below right now, before adding anything.</p>
+  </div>
+
+  <div class="step" data-tab="home" id="homeStep">
+    <div id="limitAlerts"></div>
+    <div class="home-actions">
+      <button type="button" class="btn-primary" id="homeAddDoc">&#128196; Add a document or photo</button>
+      <button type="button" class="btn-secondary" data-go="plan">&#9992;&#65039; Can I go? &mdash; plan a trip</button>
+    </div>
+    <h2 style="margin:18px 0 4px;">Needs your attention</h2>
+    <div id="attentionList"></div>
+  </div>
+
+  <div class="step" data-tab="more">
+    <h2>Save / load your data</h2>
+    <div class="backup-row">
+      <button type="button" id="exportBtn" class="btn-primary">Save my data (download a file)</button>
+      <button type="button" id="importBtn" class="btn-secondary">Load my data (from a file)</button>
+      <input type="file" id="importFile" accept="application/json" style="display:none;">
+    </div>
+    <div id="backupStatus" class="hint" style="margin-top:8px;"></div>
+    <div id="encryptionBox" class="print-note-box" style="margin-top:12px;"></div>
+    <p class="hint">Click <strong>Save my data</strong> before you close this page. Whenever you open a new copy
+      of this tool, click <strong>Load my data</strong> first &mdash; that's the only step that carries your trips
+      and bills forward.</p>
+  </div>
+
+  <div class="step" data-tab="add more">
+    <h2>Undo</h2>
+    <div class="backup-row">
+      <button type="button" id="undoBtn" class="btn-secondary">Undo last change (0 available)</button>
+      <button type="button" id="redoBtn" class="btn-secondary">Redo (0 available)</button>
+    </div>
+    <div id="undoStatus" class="hint" style="margin-top:8px;"></div>
+    <p class="hint">Every add, edit, remove, or flight-log rebuild is remembered here &mdash; click Undo to step
+      back one change at a time, up to the last 20 actions. This is separate from your
+      downloaded backup file; it works even if you haven't saved one recently.</p>
+  </div>
+
+  <div class="step" data-tab="home">
+    <h2>Your day counts</h2>
+    <div class="board" id="board"></div>
+    <details id="rulesSection" style="margin-top:14px;">
+      <summary class="hint" style="cursor:pointer; font-size:12px; color:var(--ink);">How each country counts days &mdash; rules checked <span id="rulesCheckedLabel"></span></summary>
+      <div id="rulesStale" class="print-note-box" style="display:none; margin-top:8px; border-color:var(--amber);"></div>
+      <div class="hint" style="margin-top:8px; line-height:1.7;">
+        <p><b>United Kingdom</b> &mdash; tax year 6 April to 5 April. A day counts only if he is in the UK <b>at midnight</b>: the arrival day counts, the day he leaves doesn&rsquo;t, and pure transit doesn&rsquo;t. Under 16 days (if UK-resident in any of the last 3 tax years) or under 46 (if not) = automatically non-resident; 183 or more = automatically resident; in between, his UK ties decide (family, home, work, 90 days in either of the last 2 years, and for leavers, the country tie). Rare extras not tracked here: up to 60 days of exceptional circumstances can be ignored, and a &ldquo;deeming&rdquo; rule can count some departure days for people with 3+ ties and 30+ such days. <a href="https://www.gov.uk/government/publications/rdr3-statutory-residence-test-srt" target="_blank" rel="noopener">HMRC RDR3</a></p>
+        <p><b>Schengen</b> &mdash; 90 days in any rolling 180-day period, all Schengen countries together. Entry and exit days both count. <a href="https://eur-lex.europa.eu/eli/reg/2016/399/oj" target="_blank" rel="noopener">Schengen Borders Code, Regulation (EU) 2016/399</a></p>
+        <p><b>Italy</b> &mdash; calendar year. Resident if, for most of the year (183 days, or 184 in a leap year), he is physically present, registered, or has his habitual home or the centre of his personal and family life in Italy. Since 2024 any part of a day counts. <a href="https://agenziaentrate.gov.it/portale/documents/20143/6519685/Circolare_20_del_4_11_2024_Eng.pdf/bdacb2e0-a699-5180-719e-665210459d75" target="_blank" rel="noopener">Agenzia delle Entrate, Circular 20/E (2024)</a></p>
+        <p><b>Cyprus</b> &mdash; calendar year. Resident with more than 183 days, or under the 60-day rule: 60+ days in Cyprus, no more than 183 days in any other single country, a Cyprus business, job or directorship, and a home in Cyprus. From 1 January 2026 he no longer has to be non-resident everywhere else. The departure day counts as outside Cyprus and the arrival day as inside; in and out on the same day counts as inside, out and back on the same day as outside. <a href="https://taxsummaries.pwc.com/cyprus/individual/residence" target="_blank" rel="noopener">PwC Tax Summaries &ndash; Cyprus</a></p>
+        <p><b>United States</b> &mdash; substantial presence test: at least 31 days in the current year <b>and</b> 183 days over three years, counting all days this year, a third of last year&rsquo;s and a sixth of the year before. Any part of a day counts; transit under 24 hours between two places outside the US doesn&rsquo;t. A closer-connection exception (Form 8840) can apply below 183 days in the current year. <a href="https://www.irs.gov/individuals/international-taxpayers/substantial-presence-test" target="_blank" rel="noopener">IRS</a></p>
+        <p><b>UAE</b> &mdash; resident with 183 days in any 12 consecutive months, or 90 days with UAE/GCC nationality or a residence permit plus a home or a job/business in the UAE, or if the UAE is his main home and centre of interests. Any part of a day counts. <a href="https://www.ey.com/en_gl/technical/tax-alerts/uae-issues-additional-guidance-on-determination-of-tax-residency" target="_blank" rel="noopener">Cabinet Decision 85/2022 (EY summary)</a></p>
+        <p>These counts are a guide for his tax adviser, who should confirm residence each year. A monthly check looks for rule changes; a change is applied from the date it starts, so earlier years keep the rule that applied then.</p>
+      </div>
+    </details>
+  </div>
+
+  <div class="step" data-tab="home calendar">
     <div class="asof-row">
       <span>counting as of</span>
       <input type="date" id="asof">
@@ -198,57 +287,7 @@
     </div>
   </div>
 
-  <div id="freshFileBanner" class="step">
-    <strong style="color: var(--red); font-family:'Courier New',monospace; font-size:12px;">This file has no data in it.</strong>
-    <p class="hint">If you already have a backup, click <strong>Load my data</strong> below right now, before adding anything.</p>
-  </div>
-
-  <div class="step">
-    <h2>Save / load your data</h2>
-    <div class="backup-row">
-      <button type="button" id="exportBtn" class="btn-primary">Save my data (download a file)</button>
-      <button type="button" id="importBtn" class="btn-secondary">Load my data (from a file)</button>
-      <input type="file" id="importFile" accept="application/json" style="display:none;">
-    </div>
-    <div id="backupStatus" class="hint" style="margin-top:8px;"></div>
-    <div id="encryptionBox" class="print-note-box" style="margin-top:12px;"></div>
-    <p class="hint">Click <strong>Save my data</strong> before you close this page. Whenever you open a new copy
-      of this tool, click <strong>Load my data</strong> first &mdash; that's the only step that carries your trips
-      and bills forward.</p>
-  </div>
-
-  <div class="step">
-    <h2>Undo</h2>
-    <div class="backup-row">
-      <button type="button" id="undoBtn" class="btn-secondary">Undo last change (0 available)</button>
-      <button type="button" id="redoBtn" class="btn-secondary">Redo (0 available)</button>
-    </div>
-    <div id="undoStatus" class="hint" style="margin-top:8px;"></div>
-    <p class="hint">Every add, edit, remove, or flight-log rebuild is remembered here &mdash; click Undo to step
-      back one change at a time, up to the last 20 actions. This is separate from your
-      downloaded backup file; it works even if you haven't saved one recently.</p>
-  </div>
-
-  <div class="step">
-    <h2>Your day counts</h2>
-    <div id="limitAlerts"></div>
-    <div class="board" id="board"></div>
-    <details id="rulesSection" style="margin-top:14px;">
-      <summary class="hint" style="cursor:pointer; font-size:12px; color:var(--ink);">How each country counts days &mdash; rules checked <span id="rulesCheckedLabel"></span></summary>
-      <div id="rulesStale" class="print-note-box" style="display:none; margin-top:8px; border-color:var(--amber);"></div>
-      <div class="hint" style="margin-top:8px; line-height:1.7;">
-        <p><b>United Kingdom</b> &mdash; tax year 6 April to 5 April. A day counts only if he is in the UK <b>at midnight</b>: the arrival day counts, the day he leaves doesn&rsquo;t, and pure transit doesn&rsquo;t. Under 16 days (if UK-resident in any of the last 3 tax years) or under 46 (if not) = automatically non-resident; 183 or more = automatically resident; in between, his UK ties decide (family, home, work, 90 days in either of the last 2 years, and for leavers, the country tie). Rare extras not tracked here: up to 60 days of exceptional circumstances can be ignored, and a &ldquo;deeming&rdquo; rule can count some departure days for people with 3+ ties and 30+ such days. <a href="https://www.gov.uk/government/publications/rdr3-statutory-residence-test-srt" target="_blank" rel="noopener">HMRC RDR3</a></p>
-        <p><b>Schengen</b> &mdash; 90 days in any rolling 180-day period, all Schengen countries together. Entry and exit days both count. <a href="https://eur-lex.europa.eu/eli/reg/2016/399/oj" target="_blank" rel="noopener">Schengen Borders Code, Regulation (EU) 2016/399</a></p>
-        <p><b>Italy</b> &mdash; calendar year. Resident if, for most of the year (183 days, or 184 in a leap year), he is physically present, registered, or has his habitual home or the centre of his personal and family life in Italy. Since 2024 any part of a day counts. <a href="https://agenziaentrate.gov.it/portale/documents/20143/6519685/Circolare_20_del_4_11_2024_Eng.pdf/bdacb2e0-a699-5180-719e-665210459d75" target="_blank" rel="noopener">Agenzia delle Entrate, Circular 20/E (2024)</a></p>
-        <p><b>Cyprus</b> &mdash; calendar year. Resident with more than 183 days, or under the 60-day rule: 60+ days in Cyprus, no more than 183 days in any other single country, a Cyprus business, job or directorship, and a home in Cyprus. From 1 January 2026 he no longer has to be non-resident everywhere else. The departure day counts as outside Cyprus and the arrival day as inside; in and out on the same day counts as inside, out and back on the same day as outside. <a href="https://taxsummaries.pwc.com/cyprus/individual/residence" target="_blank" rel="noopener">PwC Tax Summaries &ndash; Cyprus</a></p>
-        <p><b>United States</b> &mdash; substantial presence test: at least 31 days in the current year <b>and</b> 183 days over three years, counting all days this year, a third of last year&rsquo;s and a sixth of the year before. Any part of a day counts; transit under 24 hours between two places outside the US doesn&rsquo;t. A closer-connection exception (Form 8840) can apply below 183 days in the current year. <a href="https://www.irs.gov/individuals/international-taxpayers/substantial-presence-test" target="_blank" rel="noopener">IRS</a></p>
-        <p><b>UAE</b> &mdash; resident with 183 days in any 12 consecutive months, or 90 days with UAE/GCC nationality or a residence permit plus a home or a job/business in the UAE, or if the UAE is his main home and centre of interests. Any part of a day counts. <a href="https://www.ey.com/en_gl/technical/tax-alerts/uae-issues-additional-guidance-on-determination-of-tax-residency" target="_blank" rel="noopener">Cabinet Decision 85/2022 (EY summary)</a></p>
-        <p>These counts are a guide for his tax adviser, who should confirm residence each year. A monthly check looks for rule changes; a change is applied from the date it starts, so earlier years keep the rule that applied then.</p>
-      </div>
-    </details>
-  </div>
-
-  <div class="step" id="plannerStep">
+  <div class="step" id="plannerStep" data-tab="plan">
     <h2>Can I go? &mdash; plan a trip</h2>
     <p class="hint" style="margin:0 0 6px;">Try a trip before booking it: see what it does to every limit. Add several stops for a multi-country trip. Nothing is saved.</p>
     <div id="plannerRows"></div>
@@ -259,7 +298,7 @@
     <div id="plannerResult"></div>
   </div>
 
-  <div class="step">
+  <div class="step" data-tab="calendar">
     <h2>Calendar</h2>
     <div id="uncoveredDaysCheck" style="margin-bottom:10px;"></div>
     <div class="cal-nav">
@@ -273,7 +312,7 @@
     <div class="cal-legend" id="calLegend"></div>
   </div>
 
-  <div class="step" id="pdfImportStep">
+  <div class="step" id="pdfImportStep" data-tab="add">
     <h2>Add bookings &amp; bills from files or photos</h2>
     <p class="hint" style="margin-bottom:10px;">Airline e-tickets and itineraries (Emirates, British Airways, KLM, Lufthansa&hellip;) hotel confirmations (Hilton, Marriott&hellip;), boarding passes, and bills or receipts (restaurant, taxi, shop, laundry&hellip;) &mdash; as PDF, photo (JPEG, PNG&hellip;), saved web page (HTML) or saved email (.eml). On a phone you can take the photo straight from the camera.
       <b>The files are read on this device only &mdash; they are never uploaded or stored.</b> New flights, hotel stays and bills go straight into the calendar; anything already logged (e.g. from a boarding pass) is skipped; anything that would change a day already on the calendar waits for your yes / no. Everything added is listed below with a Remove button, and Undo reverses a whole import.</p>
@@ -296,7 +335,7 @@
     <div id="pdfImportAdded"></div>
   </div>
 
-  <div class="step">
+  <div class="step" data-tab="add">
     <h2>Log a day</h2>
     <p class="hint" style="margin-bottom:14px;">This is the one place for everything — a hotel booking, a restaurant bill, a taxi receipt, anything. Pick the country and date, add whatever you have, and it builds the trip evidence for you automatically. No need to think about “boarding pass vs trip vs bill” — just log what actually happened that day.</p>
     <form class="entry" id="expenseForm">
@@ -548,14 +587,14 @@
     </table>
   </div>
 
-  <div class="step">
+  <div class="step" data-tab="calendar" id="needsPassStep">
     <h2>Still needs a boarding pass</h2>
     <p class="hint">Every trip currently flagged as receipt-only, in one place &mdash; work through this list to
       find and log the missing flights, rather than hunting through the full trip table below.</p>
     <div id="needsPassList" style="margin-top:10px;"></div>
   </div>
 
-  <div class="step">
+  <div class="step" data-tab="more">
     <h2>Your trips</h2>
     <button type="button" id="upgradeAllBtn" class="btn-primary" style="margin-bottom:8px;">Make bill-backed trips proper (one click, does everything)</button>
     <p class="hint" style="margin-bottom:10px;">Carves precise trips out of hotel bookings, then upgrades any trip that already has at least
@@ -573,7 +612,7 @@
     <div id="tripBody"></div>
   </div>
 
-  <details id="advancedDetails" style="margin-bottom:20px; border:1px solid var(--line); border-radius:4px; padding:2px 16px;">
+  <details id="advancedDetails" data-tab="add" style="margin-bottom:20px; border:1px solid var(--line); border-radius:4px; padding:2px 16px;">
     <summary style="cursor:pointer; padding:14px 0; font-weight:bold; color:var(--ink-soft);">Advanced: log an actual boarding pass, or fix a trip's dates directly</summary>
     <p class="hint" style="margin-bottom:16px;">Most of the time, “Log a day” above is all you need. Use this only when you have a real boarding pass to log precisely, or need to manually correct a trip's exact dates.</p>
   <div class="step">
@@ -666,7 +705,7 @@
 
   </details>
 
-  <div class="step">
+  <div class="step" data-tab="more">
     <h2>Close out a year &amp; print</h2>
     <div class="close-row">
       <div>
@@ -685,9 +724,9 @@
 
   <div id="printArea"></div>
 
-  <p class="footer-note">
-    Days count as present if he was there for any part of the day, including entry and exit day. The UK test also
-    depends on ties and the midnight rule &mdash; treat the UK number as a close approximation, not a final answer.
+  <p class="footer-note" data-tab="more">
+    Each country counts days by its own rule (see &ldquo;How each country counts days&rdquo; under the day counts on Home). The UK test also
+    depends on ties &mdash; treat the UK number as a close approximation, not a final answer.
     Bill amounts are recorded exactly as entered in whatever currency you type, with no conversion. Your data is
     saved live to your private Firebase project, accessible only to the two signed-in accounts set up for it.
   </p>
@@ -1289,6 +1328,7 @@ function exportBackup() {
   a.href = url; a.download = 'travel-ledger-backup-' + new Date().toISOString().slice(0, 10) + '.json';
   document.body.appendChild(a); a.click(); a.remove();
   URL.revokeObjectURL(url);
+  try { localStorage.setItem('tl-last-backup-file', new Date().toISOString().slice(0, 10)); } catch (e) {}
 }
 async function importBackupFile(file) {
   const text = await file.text();
@@ -1646,6 +1686,75 @@ function renderLimitAlerts() {
     : '<div class="print-note-box" style="margin:0 0 12px; border-color:var(--green); color:var(--green);">✓ Today every limit is comfortably within range.</div>';
 }
 
+// ================= tabs + "Needs your attention" (Home) =================
+// Sections stay where they are in the page; a tab only shows or hides them, so nothing about
+// how they work changes. Anything that scrolls to a section in another tab switches to it first.
+function setTab(name, toTop) {
+  if (document.body.dataset.tabsOff) return; // tests show every section at once
+  document.body.dataset.tabOn = name;
+  document.querySelectorAll('#tabbar [data-go]').forEach(b => b.classList.toggle('on', b.dataset.go === name));
+  if (toTop) window.scrollTo(0, 0);
+}
+function tabShowing(el) { const on = document.body.dataset.tabOn; return !on || (el.dataset.tab || '').split(' ').includes(on); }
+(function () {
+  const plain = Element.prototype.scrollIntoView;
+  Element.prototype.scrollIntoView = function (...a) {
+    const host = this.closest && this.closest('.wrap > [data-tab]');
+    if (host && !tabShowing(host)) setTab(host.dataset.tab.split(' ')[0]);
+    return plain.apply(this, a);
+  };
+})();
+function goToSection(sel) {
+  const el = document.querySelector(sel);
+  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+function initTabs() {
+  document.querySelectorAll('[data-go]').forEach(b => b.addEventListener('click', () => setTab(b.dataset.go, true)));
+  document.getElementById('homeAddDoc').addEventListener('click', () => {
+    setTab('add', true);
+    document.getElementById('pdfImportInput').click();
+  });
+}
+let lastHeldCount = 0; // import items waiting for a yes / no (set by renderImportReview)
+function lastBackupFileDate() { try { return localStorage.getItem('tl-last-backup-file') || ''; } catch (e) { return ''; } }
+function renderAttention() {
+  const el = document.getElementById('attentionList');
+  if (!el) return;
+  const items = []; // { lvl: over|warn|info, text, btn, go }
+  if (lastHeldCount) items.push({ lvl: 'warn', text: lastHeldCount + ' item(s) from your last import are waiting for your yes / no.', btn: 'Review', go: '#pdfImportStep' });
+  let is = null; try { is = findHealthIssues(); } catch (e) {}
+  if (is) {
+    const n = is.conflicts.length + is.dupLegs.length + is.badLegs.length;
+    if (n) items.push({ lvl: 'warn', text: n + ' calendar check(s): two countries on one day, a flight logged twice, or a city in the wrong country.', btn: 'Review', go: '#uncoveredDaysCheck' });
+    if (is.billDays.length) items.push({ lvl: 'warn', text: is.billDays.length + ' day(s) have a bill but no trip.', btn: 'Review', go: '#uncoveredDaysCheck' });
+    if (is.blankDays > 0) items.push({ lvl: 'info', text: is.blankDays + ' day(s) since ' + niceDate(is.blankFrom) + ' aren\u2019t in any country yet, so they count nowhere.', btn: 'Calendar', go: '#uncoveredDaysCheck' });
+  }
+  const y = new Date().getUTCFullYear();
+  const billOnly = trips.filter(t => t.evidenceOnly && overlapsYear(t, y)).length;
+  if (billOnly) items.push({ lvl: 'info', text: billOnly + ' trip(s) this year rest on a bill only; a boarding pass or booking would make them solid.', btn: 'See list', go: '#needsPassStep' });
+  const age = Math.round((Date.now() - parseDate(RULES_CHECKED)) / DAY_MS);
+  if (age > 45) items.push({ lvl: 'warn', text: 'The country rules were last checked ' + age + ' days ago.', btn: 'Rules', go: '#rulesSection' });
+  const lb = lastBackupFileDate();
+  const lbAge = lb ? Math.round((Date.now() - parseDate(lb)) / DAY_MS) : null;
+  if (lbAge == null || lbAge > 30) items.push({ lvl: 'info', text: (lb ? 'Last backup file saved from this device ' + lbAge + ' days ago.' : 'No backup file saved from this device yet.') + ' (Online backups run daily by themselves; this is the extra copy you keep.)', btn: 'Save one', act: 'backup' });
+  const icon = { over: '\u26D4', warn: '\u26A0\uFE0F', info: '\u2139\uFE0F' };
+  el.innerHTML = items.length
+    ? items.map((it, i) => '<div class="att-item ' + it.lvl + '"><span class="att-icon">' + icon[it.lvl] + '</span><span class="att-text">' + escHtml(it.text) + '</span>' +
+        '<button type="button" data-att="' + i + '">' + escHtml(it.btn) + '</button></div>').join('')
+    : '<div class="att-item"><span class="att-icon" style="color:var(--green);">\u2713</span><span class="att-text" style="color:var(--green);">Nothing needs your attention.</span></div>';
+  el.querySelectorAll('[data-att]').forEach(b => b.onclick = () => {
+    const it = items[+b.dataset.att];
+    if (it.act === 'backup') { exportBackup(); renderAttention(); return; }
+    if (it.go === '#rulesSection') document.getElementById('rulesSection').open = true;
+    goToSection(it.go);
+  });
+  // a count on the Home tab for the things that need a decision
+  const n = items.filter(i => i.lvl !== 'info').length;
+  const homeBtn = document.querySelector('#tabbar [data-go="home"]');
+  if (homeBtn) homeBtn.innerHTML = 'Home' + (n ? '<span class="tab-badge">' + n + '</span>' : '');
+}
+function overlapsYear(t, y) { return parseDate(t.entry) <= Date.UTC(y, 11, 31) && parseDate(t.exit) >= Date.UTC(y, 0, 1); }
+
 // ================= "Can I go?" trip planner (what-if, nothing is saved) =================
 function planImpact(stops) {
   const plan = stops.map((s, i) => ({ id: 'plan-' + i, country: s.country, region: mapCountryToRegion(s.country), state: '', entry: s.from, exit: s.to }));
@@ -1752,6 +1861,7 @@ function renderBoard() {
   const stats = computeStats(asof);
   stats.forEach(s => board.appendChild(makeStub(s)));
   renderLimitAlerts();
+  renderAttention();
   const rl = document.getElementById('rulesCheckedLabel');
   if (rl) {
     rl.textContent = niceDate(parseDate(RULES_CHECKED));
@@ -2321,7 +2431,8 @@ function findHealthIssues() {
   if (allDays.length) {
     const today = parseDate(new Date().toISOString().slice(0, 10));
     let run = null;
-    for (let d = Math.max(allDays[0], Date.UTC(new Date(today).getUTCFullYear() - 1, 0, 1)); d <= today; d += DAY) {
+    issues.blankFrom = Math.max(allDays[0], Date.UTC(new Date(today).getUTCFullYear() - 1, 0, 1));
+    for (let d = issues.blankFrom; d <= today; d += DAY) {
       if (!byDay.has(d)) { run = run || [d, d]; run[1] = d; issues.blankDays++; }
       else if (run) { issues.blankRuns.push(run); run = null; }
     }
@@ -3953,7 +4064,7 @@ async function cleanupLegacyUndoFields() {
 // A tab left open keeps running the old version after an update is uploaded, so new bills can
 // miss newer features (e.g. a type that didn't exist yet). Every few minutes, and whenever the
 // tab comes back into view, compare this page's version with the one that's live.
-const APP_VERSION = '2026-10-19j';
+const APP_VERSION = '2026-10-19k';
 async function checkForNewerVersion() {
   try {
     const res = await fetch(location.href.split('#')[0], { cache: 'no-store' });
@@ -4865,6 +4976,7 @@ function renderImportReview() {
   const waiting = importItems.filter(it => !it.added && !it.discarded);
   waiting.forEach(it => { it._status = importStatus(it); });
   const held = waiting.filter(it => it._status.code === 'overlap' || it._status.code === 'check' || it._status.code === 'confirm');
+  if (held.length !== lastHeldCount) { lastHeldCount = held.length; renderAttention(); }
   if (!held.length) { el.innerHTML = ''; return; }
   const dateIn = (field, i, v) => '<input type="date" data-imp-field="' + field + '" data-imp-i="' + i + '" value="' + esc(v) + '" style="width:auto;">';
   const textIn = (field, i, v, ph, w) => '<input type="text" data-imp-field="' + field + '" data-imp-i="' + i + '" value="' + esc(v) + '" placeholder="' + ph + '" style="width:' + (w || 110) + 'px;">';
@@ -5272,6 +5384,7 @@ async function initLedger() {
   await loadAll();
   renderEncryptionStatus();
   initPlanner();
+  initTabs();
   document.getElementById('loadstatus').textContent = storageMode === 'firebase' ? 'live \u2014 saved to Firebase' : 'no connection to Firebase \u2014 check your config and internet connection';
   if (trips.length === 0 && legs.length === 0 && expenses.length === 0) document.getElementById('freshFileBanner').style.display = 'block';
   renderAll();
