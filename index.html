@@ -706,7 +706,7 @@
   </details>
 
   <div class="step" data-tab="more">
-    <h2>Close out a year &amp; print</h2>
+    <h2>Adviser report &amp; change log</h2>
     <div class="close-row">
       <div>
         <label class="hint" style="display:block;">Year</label>
@@ -716,10 +716,9 @@
         <label class="hint" style="display:block;">Note (optional)</label>
         <input type="text" id="closeNote" placeholder="e.g. 14 trips logged" style="width:100%;">
       </div>
-      <button type="button" id="prepareBtn" class="btn-primary">Prepare summary</button>
+      <button type="button" id="prepareBtn" class="btn-primary">Prepare adviser report</button>
     </div>
-    <p class="hint" style="margin-top:10px;">Builds a printable one-page summary. Review it, then press
-      <strong>Ctrl+P</strong> (Cmd+P on Mac) to print or save as PDF.</p>
+    <p class="hint" style="margin-top:10px;">Builds a report for his tax adviser: each country&rsquo;s test for that year under its own rule, where he was day by day and on what evidence, the flights and bills, anything still open, and the change log (who changed what, and when). Then tap <strong>Print now</strong> and choose <strong>Save as PDF</strong> to send it.</p>
   </div>
 
   <div id="printArea"></div>
@@ -1072,6 +1071,7 @@ async function storageSetRaw(key, value) {
   // Undo/redo history lives in its OWN document, so it can never block or slow saving the real data.
   if (isUndo) { if (undoRedoCache) undoRedoCache[key] = value; }
   else if (firestoreCache) firestoreCache[key] = value;
+  if (LOG_KEYS.has(key)) scheduleChangeLog();
   pendingSaves++; updateSaveIndicator();
   // with encryption on, the value is encrypted here first; saves of the same item stay in order
   const prev = saveChains[key] || Promise.resolve();
@@ -1108,8 +1108,10 @@ async function applyIncoming(incoming) {
   const sameAsMine = firestoreCache && [...new Set([...Object.keys(incoming), ...Object.keys(firestoreCache)])]
     .every(k => JSON.stringify(incoming[k]) === JSON.stringify(firestoreCache[k]));
   if (sameAsMine) return; // nothing actually changed
+  if (logTimer) flushChangeLog();
   firestoreCache = incoming;
   await loadAll();
+  logSetBase();
   renderAll();
   populateCloseYearSelect();
   updateUndoButton();
@@ -1144,14 +1146,15 @@ async function loadAll() {
     const legsBefore = JSON.stringify(legs);
     // Migrate legs saved under an older schema (single "date"/"note" fields)
     // to the current depDate/arrDate/depCity/arrCity structure.
-    legs = legs.map(l => ({
+    legs = legs.map(({ date, note, ...l }) => ({
+      ...l, // keep everything else on the flight (e.g. src: which file it was imported from)
       id: l.id || uid(),
-      depDate: l.depDate || l.date || '',
+      depDate: l.depDate || date || '',
       from: l.from || '',
       depCity: l.depCity || '',
       to: l.to || '',
-      arrDate: l.arrDate || l.date || l.depDate || '',
-      arrCity: l.arrCity || l.note || ''
+      arrDate: l.arrDate || date || l.depDate || '',
+      arrCity: l.arrCity || note || ''
     })).filter(l => l.depDate && l.arrDate && l.from && l.to);
     // Only write back if the migration actually changed something. Writing on EVERY load meant
     // two open copies of the app (two tabs, or two people) kept triggering each other's reload
@@ -1266,6 +1269,8 @@ async function performUndo() {
   redoStack.push(snapshotState());
   if (redoStack.length > UNDO_LIMIT) redoStack.shift();
   const prev = JSON.parse(undoStack.pop());
+  if (logTimer) flushChangeLog();
+  logTag = 'Undo';
   trips = prev.trips; legs = prev.legs; expenses = prev.expenses; dayNotes = prev.dayNotes || {};
   ukThresh = prev.ukThresh; uaeThresh = prev.uaeThresh;
   await Promise.all([saveTrips(), saveLegs(), saveExpenses(), saveUkThresh(ukThresh), saveUaeThresh(uaeThresh), saveDayNotes()]);
@@ -1291,6 +1296,8 @@ async function performRedo() {
   undoStack.push(snapshotState());
   if (undoStack.length > UNDO_LIMIT) undoStack.shift();
   const next = JSON.parse(redoStack.pop());
+  if (logTimer) flushChangeLog();
+  logTag = 'Redo';
   trips = next.trips; legs = next.legs; expenses = next.expenses; dayNotes = next.dayNotes || {};
   ukThresh = next.ukThresh; uaeThresh = next.uaeThresh;
   await Promise.all([saveTrips(), saveLegs(), saveExpenses(), saveUkThresh(ukThresh), saveUaeThresh(uaeThresh), saveDayNotes()]);
@@ -1313,6 +1320,77 @@ function updateRedoButton() {
   btn.textContent = 'Redo (' + redoStack.length + ' available)';
   btn.disabled = redoStack.length === 0;
 }
+// ================= change log: who changed what, and when =================
+// After each burst of saves, the ledger is compared with how it was before and every flight, stay,
+// bill or note that was added, removed or changed is written down with the time and the signed-in
+// account. One small entry per change, encrypted like everything else, in one document per month
+// (ledgerData/changeLog-YYYY-MM), so two devices can never overwrite each other's entries.
+const LOG_KEYS = new Set(['trips-list', 'legs-list', 'expenses-list', 'day-notes', 'uk-threshold', 'uae-threshold']);
+let logBase = null, logTimer = null, logTag = '';
+function logSetBase() { clearTimeout(logTimer); logTimer = null; logBase = snapshotState(); }
+function scheduleChangeLog() { if (logBase == null) return; clearTimeout(logTimer); logTimer = setTimeout(flushChangeLog, 2500); }
+function flushChangeLog() {
+  clearTimeout(logTimer); logTimer = null;
+  if (logBase == null) return;
+  const now = snapshotState();
+  const tag = logTag; logTag = '';
+  if (now === logBase) return;
+  let items = [];
+  try { items = describeChanges(JSON.parse(logBase), JSON.parse(now)); } catch (e) {}
+  logBase = now;
+  if (items.length) writeLogEntry({ at: new Date().toISOString(), by: (document.getElementById('currentUserEmail') || {}).textContent || '', tag, items });
+}
+window.addEventListener('pagehide', () => { if (logTimer) flushChangeLog(); });
+function describeChanges(a, b) {
+  const out = [];
+  const nd = s => s ? niceDate(parseDate(s)) : '?';
+  const legTxt = l => nd(l.depDate) + ' ' + ((l.depCity || '').trim() || l.from) + ' (' + l.from + ') \u2192 ' + ((l.arrCity || '').trim() || l.to) + ' (' + l.to + ')' + (l.arrDate && l.arrDate !== l.depDate ? ', lands ' + nd(l.arrDate) : '');
+  const billTxt = x => nd(x.date) + (x.endDate && x.endDate !== x.date ? ' \u2013 ' + nd(x.endDate) : '') + ' ' + (x.category || 'Bill') + (x.vendor ? ' \u00b7 ' + x.vendor : '') + (x.amount != null && x.amount !== '' ? ' \u00b7 ' + x.amount + ' ' + (x.currency || '') : '');
+  const tripTxt = t => (t.country || t.region) + (t.state ? ' (' + t.state + ')' : '') + ' ' + nd(t.entry) + ' \u2013 ' + nd(t.exit);
+  const src = o => o.src ? ' \u2014 from ' + o.src : '';
+  const diff = (A, B, name, txt) => {
+    const ma = new Map(A.map(o => [o.id, o])), mb = new Map(B.map(o => [o.id, o]));
+    B.forEach(o => { if (!ma.has(o.id)) out.push(name + ' added: ' + txt(o) + src(o)); });
+    A.forEach(o => { if (!mb.has(o.id)) out.push(name + ' removed: ' + txt(o)); });
+    B.forEach(o => { const p = ma.get(o.id); if (p && txt(p) !== txt(o)) out.push(name + ' changed: ' + txt(p) + '  \u2192  ' + txt(o)); });
+  };
+  diff(a.legs || [], b.legs || [], 'Flight', legTxt);
+  // stays worked out from flights are rebuilt automatically, so only stays someone entered are listed
+  diff((a.trips || []).filter(t => !t.derived), (b.trips || []).filter(t => !t.derived), 'Stay', tripTxt);
+  diff(a.expenses || [], b.expenses || [], 'Bill', billTxt);
+  const na = a.dayNotes || {}, nb = b.dayNotes || {};
+  [...new Set([...Object.keys(na), ...Object.keys(nb)])].sort().forEach(k => {
+    if ((na[k] || '') !== (nb[k] || '')) out.push('Day note ' + nd(k) + ': ' + (nb[k] ? '\u201c' + nb[k] + '\u201d' : 'removed'));
+  });
+  if (a.ukThresh !== b.ukThresh) out.push('UK day-count test changed: ' + a.ukThresh + ' \u2192 ' + b.ukThresh + ' days');
+  if (a.uaeThresh !== b.uaeThresh) out.push('UAE route changed: ' + a.uaeThresh + ' \u2192 ' + b.uaeThresh + ' days');
+  if (out.length > 300) out.splice(300, out.length - 300, '\u2026 and ' + (out.length - 300) + ' more');
+  return out;
+}
+async function writeLogEntry(e) {
+  const id = 'e' + e.at.replace(/\D/g, '') + Math.random().toString(36).slice(2, 6);
+  try {
+    const { db, doc, setDoc } = window.__fb;
+    const str = JSON.stringify(e);
+    await setDoc(doc(db, 'ledgerData', 'changeLog-' + e.at.slice(0, 7)), { [id]: cryptoKey ? await encryptStr(str) : str }, { merge: true });
+  } catch (err) { console.warn('Change log entry not saved:', err); }
+}
+// every entry for one calendar year, newest first
+async function loadChangeLog(year) {
+  const { db, doc, getDoc } = window.__fb;
+  const months = [];
+  for (let m = 1; m <= 12; m++) if (Date.UTC(year, m - 1, 1) <= Date.now()) months.push(year + '-' + String(m).padStart(2, '0'));
+  const lists = await Promise.all(months.map(async key => {
+    const list = [];
+    try {
+      const snap = await getDoc(doc(db, 'ledgerData', 'changeLog-' + key));
+      if (snap.exists()) for (const v of Object.values(snap.data() || {})) { try { list.push(JSON.parse(await decryptStr(v))); } catch (e) {} }
+    } catch (e) {}
+    return list;
+  }));
+  return lists.flat().sort((x, y) => (x.at < y.at ? 1 : -1));
+}
+
 async function saveTrips() { storageOk = await storageSetRaw('trips-list', JSON.stringify(trips)); touchLastSaved(); }
 async function saveLegs() { storageOk = await storageSetRaw('legs-list', JSON.stringify(legs)); touchLastSaved(); }
 async function saveExpenses() { storageOk = await storageSetRaw('expenses-list', JSON.stringify(expenses)); touchLastSaved(); }
@@ -1347,6 +1425,8 @@ async function importBackupFile(file) {
     'This REPLACES all of your current data. Click Cancel if you\u2019re not sure this is the right file.');
   if (!ok) { document.getElementById('backupStatus').textContent = 'Import cancelled.'; return; }
   await writeBackupNow('pre-import'); // safety copy of what was live right before this import overwrote it
+  if (logTimer) flushChangeLog();
+  logTag = 'Loaded a backup file';
   trips = newTrips;
   legs = newLegs;
   expenses = newExpenses;
@@ -3440,6 +3520,159 @@ function statusLabel(s, direction) {
   if (direction === 'atLeast') return s === 'ok' ? 'ROUTE MET' : s === 'warn' ? 'approaching threshold' : 'route not yet met';
   return s === 'over' ? 'THRESHOLD REACHED' : s === 'warn' ? 'approaching limit' : 'within limit';
 }
+// ================= adviser report (year-end pack) =================
+// One printable report per calendar year for the tax adviser: each country's count under its own
+// rule and period, where he was day by day with the evidence behind each stretch, the flights and
+// bills, anything still open, and the change log (who changed what, when).
+async function buildAdviserReport(year, note) {
+  year = Number(year);
+  const e = escHtml, nd = ms => niceDate(ms);
+  const yS = Date.UTC(year, 0, 1), yE = Date.UTC(year, 11, 31);
+  const today = parseDate(new Date().toISOString().slice(0, 10));
+  const upTo = Math.min(yE, today);                       // counts never include days still to come
+  const pmAll = presenceMap();
+  const pm = new Map([...pmAll].filter(([d]) => d <= today));
+  const region = r => c => mapCountryToRegion(c) === r;
+  const rows = [];
+  const res = (txt, cls) => '<span style="color:' + (cls === 'over' ? 'var(--red)' : cls === 'warn' ? 'var(--amber)' : 'var(--green)') + '; font-weight:bold;">' + txt + '</span>';
+
+  // United Kingdom: every tax year that touches this calendar year
+  {
+    const uk = countedDays(pm, c => c === 'United Kingdom', 'midnight');
+    [ukTaxYearRange(yS), ukTaxYearRange(yE)].filter((t, i, a) => a.findIndex(x => x.label === t.label) === i).forEach(t => {
+      if (t.start > today) return;
+      const n = inRange(uk, t.start, Math.min(t.end, today)).length, hit = nthDay(uk, t.start, t.end, ukThresh), hit183 = nthDay(uk, t.start, t.end, 183);
+      const result = n >= 183 ? res('183+ — automatically UK resident (reached ' + nd(hit183) + ')', 'over')
+        : n >= ukThresh ? res(ukThresh + '+ — not automatically non-resident; UK ties decide (reached ' + nd(hit) + ')', 'warn')
+        : res('under ' + ukThresh + ' — automatically non-resident (day count)', 'ok');
+      rows.push(['United Kingdom', 'Tax year ' + t.label + ' (' + nd(t.start) + ' – ' + nd(t.end) + ')' + (t.end > today ? ', counted to ' + nd(today) : ''),
+        'Midnights in the UK; test set to ' + ukThresh + ' days', n, result]);
+    });
+  }
+  // Schengen: highest count in any 180-day window ending in this year
+  {
+    const sch = new Set(countedDays(pm, region('Schengen'), 'anyPart'));
+    let max = 0, maxOn = null, firstOver = null;
+    for (let d = yS; d <= upTo; d += DAY_MS) {
+      let n = 0; for (let x = d - 179 * DAY_MS; x <= d; x += DAY_MS) if (sch.has(x)) n++;
+      if (n > max) { max = n; maxOn = d; }
+      if (n > 90 && !firstOver) firstOver = d;
+    }
+    const inYear = [...sch].filter(d => d >= yS && d <= upTo).length;
+    rows.push(['Schengen area', 'Any 180 days ending in ' + year, 'Entry and exit days count; 90 allowed',
+      max + (maxOn ? ' (highest, on ' + nd(maxOn) + ')' : ''),
+      (firstOver ? res('over 90 from ' + nd(firstOver), 'over') : max > 75 ? res('close to 90', 'warn') : res('within 90', 'ok')) + '<br>' + inYear + ' Schengen day(s) in ' + year]);
+  }
+  // Italy, Cyprus: calendar year
+  {
+    const it = countedDays(pm, c => c === 'Italy', 'anyPart'), L = isLeapYear(year) ? 184 : 183;
+    const n = inRange(it, yS, upTo).length, hit = nthDay(it, yS, yE, L);
+    rows.push(['Italy', 'Calendar year ' + year, 'Any part of a day; resident with ' + L + '+ (also by registration or centre of interests)', n,
+      hit ? res('reached ' + L + ' on ' + nd(hit), 'over') : res('under ' + L, n > L - 30 ? 'warn' : 'ok')]);
+    const cy = countedDays(pm, c => c === 'Cyprus', 'cyprus');
+    const m = inRange(cy, yS, upTo).length, hc = nthDay(cy, yS, yE, 184);
+    rows.push(['Cyprus', 'Calendar year ' + year, 'Arrival day in, departure day out; resident with more than 183', m,
+      (hc ? res('over 183 from ' + nd(hc), 'over') : res('183 or fewer', 'ok')) + (m >= 60 ? '<br>60-day rule may apply (60+ days): check its other conditions' : '')]);
+  }
+  // United States: substantial presence test
+  {
+    const us = countedDays(pm, region('US'), 'anyPart');
+    const cur = inRange(us, yS, upTo), p1 = inRange(us, Date.UTC(year - 1, 0, 1), Date.UTC(year - 1, 11, 31)).length, p2 = inRange(us, Date.UTC(year - 2, 0, 1), Date.UTC(year - 2, 11, 31)).length;
+    const w = cur.length + p1 / 3 + p2 / 6, need = Math.max(31, Math.ceil(183 - p1 / 3 - p2 / 6)), met = cur.length >= 31 && w >= 183;
+    rows.push(['United States', 'Calendar year ' + year + ' with ' + (year - 1) + ' and ' + (year - 2), 'Substantial presence: 31+ this year and 183 weighted', cur.length + ' (weighted ' + (Math.floor(w * 10) / 10) + ' = ' + cur.length + ' + ' + p1 + '/3 + ' + p2 + '/6)',
+      met ? res('test met on ' + nd(cur[need - 1]), 'over') : res('test not met', 'ok')]);
+  }
+  // UAE: 12 consecutive months
+  {
+    const ae = countedDays(pm, region('UAE'), 'anyPart'), set = new Set(ae);
+    let max = 0, maxOn = null;
+    const startN = (() => { let n = 0; for (let x = yS - 364 * DAY_MS; x <= yS; x += DAY_MS) if (set.has(x)) n++; return n; })();
+    let n = startN;
+    for (let d = yS; d <= upTo; d += DAY_MS) {
+      if (d > yS) { if (set.has(d)) n++; if (set.has(d - 365 * DAY_MS)) n--; }
+      if (n > max) { max = n; maxOn = d; }
+    }
+    const inYear = inRange(ae, yS, upTo).length;
+    rows.push(['UAE', 'Any 12 months ending in ' + year, (uaeThresh === 183 ? '183-day route' : '90-day route (with permit and home or work)') + '; any part of a day', max + (maxOn ? ' (highest, 12 months to ' + nd(maxOn) + ')' : ''),
+      (max >= uaeThresh ? res('route met (' + uaeThresh + '+)', 'ok') : res('route not met (' + uaeThresh + ' needed)', 'warn')) + '<br>' + inYear + ' UAE day(s) in ' + year]);
+  }
+
+  // days per country in the year (any part of a day)
+  const perCountry = {};
+  for (let d = yS; d <= upTo; d += DAY_MS) (pm.get(d) || []).forEach(c => { perCountry[c] = (perCountry[c] || 0) + 1; });
+  let noRecord = 0; for (let d = yS; d <= upTo; d += DAY_MS) if (!pm.has(d)) noRecord++;
+
+  // where he was, day by day, as stretches, with the evidence behind each
+  const flightDays = new Set(); legs.forEach(l => { flightDays.add(parseDate(l.depDate)); flightDays.add(parseDate(l.arrDate)); });
+  const entered = d => trips.some(t => !t.derived && parseDate(t.entry) <= d && parseDate(t.exit) >= d);
+  const billed = d => expenses.some(x => billCoversDay(x, d));
+  const stretches = [];
+  for (let d = yS; d <= upTo; d += DAY_MS) {
+    const cs = pm.get(d), key = cs ? [...cs].sort().join(' + ') : '— no record —';
+    const ev = flightDays.has(d) ? 'f' : billed(d) ? 'b' : cs && entered(d) ? 'e' : cs ? 'a' : '';
+    const last = stretches[stretches.length - 1];
+    if (last && last.key === key && last.to === d - DAY_MS) { last.to = d; if (ev) last.ev[ev]++; }
+    else stretches.push({ key, from: d, to: d, ev: { f: ev === 'f' ? 1 : 0, b: ev === 'b' ? 1 : 0, e: ev === 'e' ? 1 : 0, a: ev === 'a' ? 1 : 0 } });
+  }
+  const evTxt = v => [v.f && v.f + ' flight day' + (v.f > 1 ? 's' : ''), v.b && v.b + ' with bills', v.e && v.e + ' entered', v.a && v.a + ' assumed between flights'].filter(Boolean).join(', ');
+
+  const yLegs = legs.filter(l => { const d = parseDate(l.depDate); return d >= yS && d <= yE; }).sort((a, b) => parseDate(a.depDate) - parseDate(b.depDate));
+  const yBills = expenses.filter(x => { const d = parseDate(x.date); return d >= yS && d <= yE; }).sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+  let is = null; try { is = findHealthIssues(); } catch (err) {}
+  const inY = ms => ms >= yS && ms <= yE;
+  const open = [];
+  if (is) {
+    is.conflicts.filter(c => inY(c.from) || inY(c.to)).forEach(c => open.push(nd(c.from) + (c.to !== c.from ? ' – ' + nd(c.to) : '') + ': recorded in two countries with no flight between them.'));
+    is.billDays.filter(s => inY(parseDate(s))).forEach(s => open.push(nd(parseDate(s)) + ': a bill but no stay recorded.'));
+  }
+  if (noRecord) open.push(noRecord + ' day(s) in ' + year + ' have no record of any country, so they count for none.');
+  const log = await loadChangeLog(year);
+
+  const by = (document.getElementById('currentUserEmail') || {}).textContent || '';
+  const H = t => '<h3 style="font-size:13px; font-weight:normal; text-transform:uppercase; letter-spacing:1px; margin:22px 0 8px; font-family:\'Courier New\',monospace;">' + t + '</h3>';
+  let html = '<div class="print-header"><h2>Travel day-count report &mdash; ' + year + '</h2>' +
+    '<div class="meta">Prepared ' + nd(today) + (by ? ' by ' + e(by) : '') + ' &middot; ' + (yE > today ? 'year in progress, counted to ' + nd(today) : 'full year') +
+    ' &middot; rules checked ' + nd(parseDate(RULES_CHECKED)) + '</div></div>';
+  if (note) html += '<div class="print-note-box"><strong>Note:</strong> ' + e(note) + '</div>';
+
+  html += H('1. Residence tests') + '<table class="ledger"><thead><tr><th>Country</th><th>Period</th><th>How days count</th><th>Days</th><th>Result</th></tr></thead><tbody>' +
+    rows.map(r => '<tr><td>' + e(r[0]) + '</td><td>' + e(r[1]) + '</td><td>' + e(r[2]) + '</td><td>' + e(r[3]) + '</td><td>' + r[4] + '</td></tr>').join('') + '</tbody></table>';
+
+  html += H('2. Days in each country, ' + year) + '<table class="ledger"><thead><tr><th>Country</th><th>Days (any part of a day)</th></tr></thead><tbody>' +
+    Object.entries(perCountry).sort((a, b) => b[1] - a[1]).map(([c, n]) => '<tr><td>' + e(c) + '</td><td>' + n + '</td></tr>').join('') +
+    (noRecord ? '<tr><td><i>No record</i></td><td>' + noRecord + '</td></tr>' : '') + '</tbody></table>' +
+    '<p class="hint">A travel day is counted in both countries here; the tests above apply each country&rsquo;s own rule.</p>';
+
+  html += H('3. Where, day by day') + '<table class="ledger"><thead><tr><th>From</th><th>To</th><th>Days</th><th>Country</th><th>Evidence</th></tr></thead><tbody>' +
+    stretches.map(s => '<tr><td>' + nd(s.from) + '</td><td>' + nd(s.to) + '</td><td>' + ((s.to - s.from) / DAY_MS + 1) + '</td><td>' + e(s.key) + '</td><td>' + e(evTxt(s.ev)) + '</td></tr>').join('') + '</tbody></table>' +
+    '<p class="hint">&ldquo;Assumed between flights&rdquo; means no bill or entry for that day: he is taken to have stayed where the last flight landed until the next flight.</p>';
+
+  html += H('4. Flights (' + yLegs.length + ')') + (yLegs.length ? '<table class="ledger"><thead><tr><th>Date</th><th>From</th><th>To</th><th>Lands</th><th>Source</th></tr></thead><tbody>' +
+    yLegs.map(l => '<tr><td>' + nd(parseDate(l.depDate)) + '</td><td>' + e(((l.depCity || '').trim() ? l.depCity.trim() + ', ' : '') + l.from) + '</td><td>' + e(((l.arrCity || '').trim() ? l.arrCity.trim() + ', ' : '') + l.to) + '</td><td>' + (l.arrDate !== l.depDate ? nd(parseDate(l.arrDate)) : 'same day') + '</td><td>' + e(l.src || 'entered by hand') + '</td></tr>').join('') + '</tbody></table>' : '<p class="hint">No flights logged.</p>');
+
+  html += H('5. Bills and bookings (' + yBills.length + ')');
+  if (yBills.length) {
+    html += '<table class="ledger"><thead><tr><th>Date</th><th>Type</th><th>Vendor</th><th>Country</th><th>Amount</th></tr></thead><tbody>' +
+      yBills.map(x => { const t = trips.find(tr => tr.id === x.tripId);
+        return '<tr><td>' + nd(parseDate(x.date)) + (x.endDate && x.endDate !== x.date ? ' – ' + nd(parseDate(x.endDate)) : '') + '</td><td>' + e(x.category) + '</td><td>' + e(x.vendor || '') + '</td><td>' + e(t ? t.country : '') + '</td><td>' + (x.amount != null && x.amount !== '' ? e(Number(x.amount).toFixed(2) + ' ' + (x.currency || '')) : '') + '</td></tr>'; }).join('') + '</tbody></table>';
+    const totals = {};
+    yBills.forEach(x => { if (x.amount == null || x.amount === '') return; const c = x.currency || '(no currency)'; totals[c] = (totals[c] || 0) + Number(x.amount); });
+    const tot = Object.entries(totals).map(([c, a]) => a.toFixed(2) + ' ' + c).join(' + ');
+    if (tot) html += '<p class="hint">Total by currency: ' + e(tot) + '</p>';
+  } else html += '<p class="hint">No bills logged.</p>';
+
+  html += H('6. Open points') + (open.length ? '<ul class="hint" style="margin:0; padding-left:18px;">' + open.map(o => '<li>' + e(o) + '</li>').join('') + '</ul>' : '<p class="hint">None: every day has a country and nothing clashes.</p>');
+
+  html += H('7. Change log (' + log.length + ' change' + (log.length === 1 ? '' : 's') + ')') +
+    (log.length ? log.map(en => '<div style="border-top:1px dotted var(--line); padding:6px 0; font-family:\'Courier New\',monospace; font-size:11px;"><b>' +
+      e(new Date(en.at).toLocaleString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })) + '</b> &middot; ' + e(en.by || 'unknown') + (en.tag ? ' &middot; ' + e(en.tag) : '') +
+      '<ul style="margin:2px 0 0; padding-left:18px;">' + (en.items || []).map(i => '<li>' + e(i) + '</li>').join('') + '</ul></div>').join('')
+      : '<p class="hint">No changes recorded for ' + year + '. (The log starts on ' + nd(parseDate('2026-10-19')) + ', when it was added.)</p>');
+
+  html += '<div class="hint" style="margin-top:18px; border-top:1px dashed var(--line-strong); padding-top:10px;">Prepared from his travel records (boarding passes, bookings, bills and entries). A guide for his tax adviser, who should confirm residence each year. Rules and sources: HMRC RDR3 (UK), Regulation (EU) 2016/399 (Schengen), Agenzia delle Entrate Circular 20/E 2024 (Italy), Cyprus Income Tax Law, IRS substantial presence test (US), UAE Cabinet Decision 85/2022.</div>';
+  return html;
+}
+
 function buildPrintSummary(year, note) {
   const yearEndMs = Date.UTC(Number(year), 11, 31);
   const yearStartMs = Date.UTC(Number(year), 0, 1);
@@ -3962,11 +4195,16 @@ document.getElementById('expenseForm').addEventListener('submit', async (e) => {
 });
 
 // ================= events: print =================
-document.getElementById('prepareBtn').addEventListener('click', () => {
+document.getElementById('prepareBtn').addEventListener('click', async () => {
   const year = document.getElementById('closeYear').value;
   const note = document.getElementById('closeNote').value;
   const area = document.getElementById('printArea');
-  area.innerHTML = buildPrintSummary(year, note);
+  const btn = document.getElementById('prepareBtn');
+  btn.disabled = true; btn.textContent = 'Preparing\u2026';
+  if (logTimer) flushChangeLog();
+  try { area.innerHTML = await buildAdviserReport(year, note); }
+  catch (err) { console.error(err); area.innerHTML = '<p class="hint">Could not prepare the report: ' + escHtml(err.message) + '</p>'; }
+  finally { btn.disabled = false; btn.textContent = 'Prepare adviser report'; }
   area.classList.add('active');
   document.getElementById('printToolbar').style.display = 'flex';
   area.scrollIntoView({ behavior: 'smooth' });
@@ -4064,7 +4302,7 @@ async function cleanupLegacyUndoFields() {
 // A tab left open keeps running the old version after an update is uploaded, so new bills can
 // miss newer features (e.g. a type that didn't exist yet). Every few minutes, and whenever the
 // tab comes back into view, compare this page's version with the one that's live.
-const APP_VERSION = '2026-10-19k';
+const APP_VERSION = '2026-10-19l';
 async function checkForNewerVersion() {
   try {
     const res = await fetch(location.href.split('#')[0], { cache: 'no-store' });
@@ -5382,6 +5620,7 @@ async function initLedger() {
   await ensureUnlocked();
   await cleanupLegacyUndoFields();
   await loadAll();
+  logSetBase();
   renderEncryptionStatus();
   initPlanner();
   initTabs();
