@@ -3581,7 +3581,7 @@ async function cleanupLegacyUndoFields() {
 // A tab left open keeps running the old version after an update is uploaded, so new bills can
 // miss newer features (e.g. a type that didn't exist yet). Every few minutes, and whenever the
 // tab comes back into view, compare this page's version with the one that's live.
-const APP_VERSION = '2026-10-19b';
+const APP_VERSION = '2026-10-19c';
 async function checkForNewerVersion() {
   try {
     const res = await fetch(location.href.split('#')[0], { cache: 'no-store' });
@@ -4002,7 +4002,7 @@ async function ocrImageToLines(file, onProgress) {
   try { canvas = await photoToCanvas(file, 2200); }
   catch (e) { const { data } = await worker.recognize(file); return toLines(data.text); }   // the browser couldn't draw it: read it as it is
   const tries = [[0, '3'], [0, '11'], [0, '3', 3400], [1, '3'], [3, '3'], [2, '3'], [1, '11'], [3, '11']];
-  const sized = {};
+  const sized = {}, upright = [];
   let best = null;
   for (let ti = 0; ti < tries.length; ti++) {
     const [q, psm, size] = tries[ti];
@@ -4012,11 +4012,13 @@ async function ocrImageToLines(file, onProgress) {
     if (size) { try { base = sized[size] || (sized[size] = await photoToCanvas(file, size)); } catch (e) { continue; } }
     const { data } = await worker.recognize(q ? turnCanvas(base, q) : base);
     const lines = toLines(wordsToLines(data).join('\n')), score = readingScore(lines);
+    if (!q) upright.push(...lines);
     if (!best || score > best.score) best = { lines, score };
     const r = parseBookingText(lines, WORLD_COUNTRIES);
     if (r.flights.length || r.hotels.length || (parseReceipt(lines) && findDates(lines.join(' ')).length)) { best = { lines, score: 1e9 }; break; }   // good enough
   }
   await worker.setParameters({ tessedit_pageseg_mode: '3' });
+  best.lines.upright = upright;
   return best.lines;
 }
 async function ocrPdfToLines(pdf, onProgress) {
@@ -4152,6 +4154,33 @@ function parseReceipt(lines) {
 }
 const CURRENCY_COUNTRY = { AED: 'United Arab Emirates', GBP: 'United Kingdom', CHF: 'Switzerland', SGD: 'Singapore', PHP: 'Philippines', KES: 'Kenya', SAR: 'Saudi Arabia', QAR: 'Qatar', OMR: 'Oman', BHD: 'Bahrain', KWD: 'Kuwait', INR: 'India', JPY: 'Japan', HKD: 'Hong Kong', AUD: 'Australia', CAD: 'Canada', THB: 'Thailand', MVR: 'Maldives', LKR: 'Sri Lanka', TRY: 'Turkey', EGP: 'Egypt', ZAR: 'South Africa', USD: 'United States' };
 
+// ---- a boarding pass the photo couldn't fully show: prefill what was read, leave the rest to fill in ----
+const AIRLINE_WORDS = [[/emirat/i, 'EK'], [/britis|speedbird|\/BA\//i, 'BA'], [/etihad/i, 'EY'], [/qatar/i, 'QR'], [/lufthansa/i, 'LH'], [/\bklm\b|royal dutch/i, 'KL'], [/air france/i, 'AF'],
+  [/swiss/i, 'LX'], [/\bita\b|alitalia/i, 'AZ'], [/turkish/i, 'TK'], [/virgin/i, 'VS'], [/flydubai/i, 'FZ'], [/singapore air/i, 'SQ'], [/cathay/i, 'CX'], [/american/i, 'AA'], [/united/i, 'UA'],
+  [/delta/i, 'DL'], [/easyjet/i, 'U2'], [/ryanair/i, 'FR'], [/aegean/i, 'A3'], [/cyprus airways/i, 'CY'], [/qantas/i, 'QF'], [/philippine/i, 'PR'], [/cebu/i, 'PR']];
+function looksLikeBoardingPass(text) {
+  return /board|gate|seat|boarding|depart|flight|airways|airlines|emirates|zone|group|sequence|\bseq\b/i.test(text);
+}
+function partialFlightFromText(lines) {
+  const text = lines.join('  ');
+  const it = { kind: 'flight', depDate: '', arrDate: '', from: '', to: '', depCity: '', arrCity: '', flightNo: '', partial: true, raw: lines.join(' \u00b7 ').replace(/\s+/g, ' ').slice(0, 220) };
+  const full = findDates(text);
+  if (full.length) it.depDate = it.arrDate = full[0].date;
+  else { const yl = yearlessDates(text); if (yl.length) { it.depDate = it.arrDate = yl[0].date; it.yearGuessed = true; } }
+  const codes = [];
+  lines.forEach(l => airportsIn(l, true).forEach(a => { if (!codes.includes(a.code)) codes.push(a.code); }));
+  if (codes.length >= 2) { [it.depCity, it.from] = AIRPORTS[codes[0]]; [it.arrCity, it.to] = AIRPORTS[codes[1]]; }
+  else if (codes.length === 1) {
+    if (new RegExp('(>|\u2192|\\bTO\\b|-)\\s*' + codes[0] + '\\b').test(text)) [it.arrCity, it.to] = AIRPORTS[codes[0]];
+    else [it.depCity, it.from] = AIRPORTS[codes[0]];
+  }
+  // a flight number only counts here if it has 3+ digits ("GA1" in a blurry photo is noise); else the airline's name
+  const fno = (text.match(FLIGHT_NO) || [''])[0].replace(/\s+/g, '');
+  const byName = (AIRLINE_WORDS.find(([re]) => re.test(text)) || [, ''])[1];
+  it.flightNo = /\d{3}/.test(fno) ? fno : byName || '';
+  return it;
+}
+
 // ---- the review table ----
 let importItems = [];   // everything found in the PDFs so far, waiting for approval
 const esc = v => String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
@@ -4233,7 +4262,10 @@ function flightChangesHistory(it) {
 function importStatus(it) {
   if (it.added) return { code: 'added', text: '✓ added' };
   if (it.kind === 'flight') {
-    if (!it.depDate || !it.from || !it.to) return { code: 'check', text: 'Fill in the missing details' };
+    if (!it.depDate || !it.from || !it.to) {
+      const miss = [!it.depDate ? 'the date' : '', !it.from ? 'where it left from' : '', !it.to ? 'where it went to' : ''].filter(Boolean);
+      return { code: 'check', text: (it.partial ? 'The photo didn\u2019t show ' : 'Missing: ') + miss.join(', ').replace(/, ([^,]*)$/, ' and $1') + '. Fill ' + (miss.length > 1 ? 'them' : 'it') + ' in above and it\u2019s added.' };
+    }
     const dup = legs.find(l => l.depDate === it.depDate && l.from === it.from && l.to === it.to);
     if (dup) return { code: 'already', text: 'Already in the ledger' };
     // on the travel day(s) he can only be in the two countries of the flight
@@ -4245,7 +4277,7 @@ function importStatus(it) {
     if (clash.size) return { code: 'overlap', text: 'Overlaps: the ledger has him in ' + [...clash.values()].map(t => tripPlaceLabel(t) + ' ' + t.entry + ' \u2192 ' + t.exit).join('; ') + ' that day' };
     const change = flightChangesHistory(it);
     if (change) return { code: 'overlap', text: change.text, similarId: change.similarId };
-    if (it.yearGuessed || it.guessNote || it.partial) return { code: 'confirm', text: [it.guessNote || '', it.yearGuessed ? 'A boarding pass doesn\u2019t print the year \u2014 it was taken as ' + it.depDate.slice(0, 4) + '.' : '', 'Check the details, then add it.'].filter(Boolean).join(' ') };
+    if (it.yearGuessed || it.guessNote || it.partial) return { code: 'confirm', text: [it.guessNote || '', it.yearGuessed ? 'The pass doesn\u2019t print the year \u2014 tap the right year and it\u2019s added.' : 'Check the details, then add it.'].filter(Boolean).join(' ') };
     return { code: 'new', text: 'New' };
   }
   if (it.kind === 'bill') {
@@ -4303,17 +4335,21 @@ function renderImportReview() {
       ? '<b>✈ ' + esc(it.flightNo || 'Flight') + '</b> ' + textIn('depCity', i, it.depCity, 'from city') + countrySelect('from', i, it.from) +
         ' → ' + textIn('arrCity', i, it.arrCity, 'to city') + countrySelect('to', i, it.to)
       : '<b>\u{1F3E8} ' + textIn('hotel', i, it.hotel, 'hotel name', 190) + '</b> ' + textIn('city', i, it.city, 'city') + countrySelect('country', i, it.country);
+    const yearBtns = (it.kind === 'flight' && it.depDate && it.yearGuessed)
+      ? ' <span class="hint">year:</span> ' + [0, 1, 2].map(k => new Date().getFullYear() - k).reverse().map(y =>
+          '<button type="button" class="btn-secondary hc-btn" style="padding:2px 8px; margin:0 2px;" data-imp-year="' + i + '" data-year="' + y + '">' + y + '</button>').join('')
+      : '';
     const dates = it.kind === 'bill' ? dateIn('date', i, it.date) : it.kind === 'flight'
       ? dateIn('depDate', i, it.depDate) + (it.arrDate && it.arrDate !== it.depDate ? ' <span class="hint">arr.</span> ' + dateIn('arrDate', i, it.arrDate) : '')
       : '<span class="hint">in</span> ' + dateIn('checkIn', i, it.checkIn) + ' <span class="hint">out</span> ' + dateIn('checkOut', i, it.checkOut);
     const canAdd = it._status.code === 'overlap' || it._status.code === 'confirm';
     return '<div style="border-top:1px solid var(--line); padding:8px 0;">' + details +
-      '<div class="hint" style="margin-top:4px;">' + dates + ' &middot; from ' + esc(it.file) + '</div>' +
+      '<div class="hint" style="margin-top:4px;">' + dates + yearBtns + ' &middot; from ' + esc(it.file) + '</div>' +
       (it.raw ? '<div class="hint" style="margin-top:2px;">Read from: \u201c' + esc(it.raw) + '\u201d</div>' : '') +
       '<div style="color:' + (canAdd ? 'var(--alert)' : 'var(--amber)') + '; font-size:12px; margin-top:4px;">' + esc(it._status.text) + '</div>' +
       '<div style="margin-top:6px;">' +
       (it._status.similarId ? '<button type="button" class="btn-primary hc-btn" data-imp-replace="' + i + '">Use these dates instead (correct the logged flight)</button>' : '') +
-      (canAdd ? '<button type="button" class="' + (it._status.similarId ? 'btn-secondary' : 'btn-primary') + ' hc-btn" data-imp-yes="' + i + '">' + (it._status.similarId ? 'It’s a different flight — add it too' : 'Yes, it’s correct — add it') + '</button>' : '<span class="hint">Fix the details above and it will be added.</span> ') +
+      (canAdd ? '<button type="button" class="' + (it._status.similarId ? 'btn-secondary' : 'btn-primary') + ' hc-btn" data-imp-yes="' + i + '">' + (it._status.similarId ? 'It’s a different flight — add it too' : 'Yes, it’s correct — add it') + '</button>' : it.partial ? '' : '<span class="hint">Fix the details above and it will be added.</span> ') +
       '<button type="button" class="btn-secondary hc-btn" data-imp-no="' + i + '">No, discard</button></div></div>';
   }).join('');
   const lookAlikes = held.filter(it => it._status.similarId);
@@ -4336,6 +4372,18 @@ function renderImportReview() {
     renderImportReview();
   });
   el.querySelectorAll('[data-imp-yes]').forEach(b => b.onclick = async () => { b.disabled = true; await addImportedItems([importItems[+b.dataset.impYes]]); });
+  // picking the year is the answer: the flight goes in (unless it clashes, then it says why)
+  el.querySelectorAll('[data-imp-year]').forEach(b => b.onclick = async () => {
+    const it = importItems[+b.dataset.impYear], y = b.dataset.year;
+    const shift = s => s ? y + s.slice(4) : s;
+    const nd = shift(it.depDate), na = shift(it.arrDate || it.depDate);
+    it.depDate = nd; it.arrDate = na < nd ? nd : na;
+    it.yearGuessed = false; it.guessNote = ''; it.partial = false;
+    const st = importStatus(it);
+    if (st.code === 'new') { await addImportedItems([it]); return; }
+    if (st.code === 'already') it.discarded = true;
+    renderImportReview();
+  });
   el.querySelectorAll('[data-imp-replace]').forEach(b => b.onclick = async () => { b.disabled = true; await correctLoggedFlights([importItems[+b.dataset.impReplace]]); });
   const ra = document.getElementById('impReplaceAll');
   if (ra) ra.onclick = async () => { ra.disabled = true; await correctLoggedFlights(lookAlikes); };
@@ -4420,6 +4468,9 @@ async function readPdfFiles(files) {
       unread.push({ name: f.name, picture: kind === 'image' || viaOcr,
         error: heic ? 'this browser can’t open iPhone HEIC photos — on the phone, choose the photo from the ledger itself, or save it as JPEG' : (e && e.message || 'could not be opened') });
       continue;
+    }
+    if (!items.length && viaOcr && looksLikeBoardingPass((lines.upright || lines).join(' '))) {
+      items = [partialFlightFromText(lines.upright && lines.upright.length ? lines.upright : lines)];
     }
     if (!items.length) {
       // what the reader could see, so the reason is clear (all of this stays on this screen)
