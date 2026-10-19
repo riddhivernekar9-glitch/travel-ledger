@@ -56,6 +56,7 @@
   .stub .bar-fill { height: 100%; border-radius: 3px; }
   .stub .status { font-family: "Courier New", monospace; font-size: 11px; padding: 3px 7px; border-radius: 2px; display: inline-block; }
   @media (max-width: 700px) { table.ledger { display: block; overflow-x: auto; max-width: 100%; } }
+  .cal-day.guess-day { border-style: dashed !important; border-width: 1.5px !important; opacity: 0.8; }
   .stub-lines { margin-top: 8px; font-family: "Courier New", monospace; font-size: 11px; line-height: 1.5; }
   .stub-lines .lim-hit { color: var(--red); font-weight: bold; }
   .stub-lines .lim-ok { color: var(--green); font-weight: bold; }
@@ -2242,6 +2243,11 @@ function renderCalendar() {
       cell.insertAdjacentHTML('beforeend', '<div class="day-note-line" style="font-size:10px; font-style:italic; margin-top:2px; line-height:1.15; color:' + (onDark ? '#fff' : 'var(--ink)') + ';">&#128221; ' +
         dayNoteOverride.replace(/</g, '&lt;') + '</div>');
     }
+    // A day that's only a guess between two flights (no bill, nothing entered): dashed outline
+    if (allTripsToday.length && allTripsToday.every(t => t.derived) && !tags.length && !buildFlightDayRoute(dateStr)) {
+      cell.classList.add('guess-day');
+      cell.title = (cell.title ? cell.title + ' \u2014 ' : '') + 'assumed: between two flights, no bill or entry for this day yet';
+    }
     // A small document mark on days where something came from an imported file (hover to see which)
     {
       const fromFiles = legs.filter(l => l.src && (l.depDate === dateStr || l.arrDate === dateStr)).map(l => l.src)
@@ -2303,6 +2309,8 @@ function renderCalendar() {
     '<span><span class="sw" style="background:' + c.bg + '; border-color:' + c.border + '"></span>' + region + '</span>').join('') +
     '<span>&#9992; = flight route that day</span>' +
     '<span>(text) = a bill/receipt logged that day</span>' +
+    '<span><span class="sw" style="border-style:dashed;"></span>dashed = assumed between two flights, no bill or entry yet</span>' +
+    '<span>&#128196; = added from a file (hover to see which)</span>' +
     '<span>&#9888; bold magenta = a bill exists but no trip covers this day yet, or a receipt-only transit day between two countries</span>' +
     '<span>click any highlighted day to jump to it in the lists below</span>';
 }
@@ -3593,7 +3601,7 @@ async function cleanupLegacyUndoFields() {
 // A tab left open keeps running the old version after an update is uploaded, so new bills can
 // miss newer features (e.g. a type that didn't exist yet). Every few minutes, and whenever the
 // tab comes back into view, compare this page's version with the one that's live.
-const APP_VERSION = '2026-10-19e';
+const APP_VERSION = '2026-10-19g';
 async function checkForNewerVersion() {
   try {
     const res = await fetch(location.href.split('#')[0], { cache: 'no-store' });
@@ -3790,6 +3798,33 @@ function parseFlights(lines) {
 }
 
 const HOTEL_BRANDS = /(hilton|conrad|waldorf|doubletree|hampton|marriott|ritz[- ]carlton|st\.? regis|sheraton|westin|le m[ée]ridien|w hotel|edition|luxury collection|renaissance|courtyard|moxy|aloft|four seasons|mandarin oriental|shangri-?la|hyatt|andaz|intercontinental|crowne plaza|holiday inn|kimpton|radisson|park inn|sofitel|novotel|pullman|fairmont|raffles|swiss[oô]tel|accor|kempinski|jumeirah|atlantis|rosewood|peninsula|aman|bulgari|armani|rocco forte|belmond|one&only|one and only|six senses|banyan tree|anantara|rotana|taj|oberoi|melia|nh hotel|best western|ibis|mercure|premier inn|hotel|resort|inn\b|suites)/i;
+// Loyalty statements (Hilton Honors, Marriott Bonvoy…) list one stay per row: hotel name + a date
+// range. Reads every such row. Numeric dates are read day-first, unless that gives an impossible
+// range, then month-first (US style "10/12/25 - 10/15/25").
+function parseStayRows(lines, knownCountries) {
+  const stays = [], seen = new Set();
+  const mdy = t => { const out = []; const re = /\b(\d{1,2})[./](\d{1,2})[./](20\d{2}|\d{2})\b/g; let m; while ((m = re.exec(t))) { const d = okDate(yr(m[3]), +m[1], +m[2]); if (d) out.push({ date: d, index: m.index }); } return out; };
+  lines.forEach((l, i) => {
+    if (!HOTEL_BRANDS.test(l) || /\bbook\b|\boffer\b|\bearn\b|\bsave\b/i.test(l)) return;
+    const row = l + (lines[i + 1] && !HOTEL_BRANDS.test(lines[i + 1]) && findDates(l).length < 2 ? '  ' + lines[i + 1] : '');
+    const ok = (a, b) => a && b && b > a && (Date.parse(b) - Date.parse(a)) <= 60 * 86400000;
+    let ds = findDates(row), a = ds[0] && ds[0].date, b = ds[1] && ds[1].date;
+    if (!ok(a, b)) { const m2 = mdy(row); if (m2.length >= 2 && ok(m2[0].date, m2[1].date)) { a = m2[0].date; b = m2[1].date; ds = m2; } }
+    if (!ok(a, b)) return;
+    const key = a + b;
+    if (seen.has(key)) return;
+    seen.add(key);
+    const cut = Math.min(ds[0] ? ds[0].index : row.length, ...[row.search(/\d/), row.length].filter(x => x >= 0));
+    const hotel = row.slice(0, cut).replace(/^(hotel\s+stay|stay(\s+at)?|stays?)\s*[:\-]?\s*/i, '').replace(/[\s,:\-–|]+$/, '').trim().slice(0, 70);
+    let country = '', best = Infinity;
+    knownCountries.forEach(c => { const k = row.search(new RegExp('\\b' + c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'i')); if (k >= 0 && k < best) { best = k; country = c; } });
+    let city = '', cb = Infinity;
+    Object.values(AIRPORTS).forEach(([c, co]) => { const k = row.search(new RegExp('\\b' + c + '\\b', 'i')); if (k >= 0 && k < cb && (!country || co === country)) { cb = k; city = c; } });
+    if (!country && city) country = Object.values(AIRPORTS).find(x => x[0] === city)[1];
+    stays.push({ kind: 'hotel', checkIn: a, checkOut: b, hotel: hotel || 'Hotel', city, country, amount: null, currency: '', raw: row.replace(/\s+/g, ' ').slice(0, 220) });
+  });
+  return stays;
+}
 function parseHotels(lines, knownCountries) {
   const text = lines.join('\n');
   const labelIn = /(check[\s-]?in|arrival|arriving|arrive)\b/i, labelOut = /(check[\s-]?out|departure|departing|depart)\b/i;
@@ -3843,8 +3878,9 @@ function fixOcrMonths(l) {
 function parseBookingText(lines, knownCountries) {
   const clean = lines.map(l => fixOcrMonths(l.replace(/\s+/g, ' ').trim())).filter(Boolean);
   const flights = parseFlights(clean);
-  let hotels = parseHotels(clean, knownCountries);
-  if (flights.length && !/check[\s-]?in/i.test(clean.join(' '))) hotels = [];
+  const rows = parseStayRows(clean, knownCountries);
+  let hotels = rows.length >= 2 ? rows : parseHotels(clean, knownCountries);   // a statement lists several stays
+  if (flights.length && rows.length < 2 && !/check[\s-]?in/i.test(clean.join(' '))) hotels = [];
   return { flights, hotels };
 }
 // pdf.js page -> lines, by grouping text pieces that sit on the same height, left to right
@@ -4364,17 +4400,27 @@ function flightChangesHistory(it) {
     const evidence = new Set(trips.filter(t => !t.derived && overlapDays(t.entry, t.exit, d, d) > 0).map(t => t.country));
     const billCountries = new Set();
     expenses.forEach(ex => { if (ex.date && billCoversDay(ex, d)) { const t = tripById.get(ex.tripId); if (t) { evidence.add(t.country); billCountries.add(t.country); } } });
-    const shown = new Set([...at(before, d), ...evidence]);
-    if (!shown.size) return; // an empty day: filling it in changes nothing that's there
-    const will = new Set([...at(after, d), ...evidence]);
-    const added = [...will].filter(c => !shown.has(c) && !(travelDays.has(d) && (c === cand.from || c === cand.to)));
-    const removed = [...shown].filter(c => !will.has(c));
-    if (added.length || removed.length) conflicts.push({ d, was: [...shown], bills: [...billCountries], added, will: [...will] });
+    // A day that's only a guess between two flights (no bill, nothing entered) may be reshaped by a
+    // real document freely. Only proof is protected: a new flight mustn't put him somewhere else on a
+    // day a bill or an entered trip says otherwise, nor leave a bill with no trip.
+    if (!evidence.size) return;
+    const newGuess = at(after, d);
+    const will = new Set([...newGuess, ...trips.filter(t => !t.derived && overlapDays(t.entry, t.exit, d, d) > 0).map(t => t.country)]);
+    // on a flight day, both ends of that flight are genuine (this flight or any already logged)
+    const flightEnds = new Set();
+    legs.concat([cand]).forEach(l => { if (parseDate(l.depDate) === d || parseDate(l.arrDate || l.depDate) === d) { flightEnds.add(l.from); flightEnds.add(l.to); } });
+    const added = [...newGuess].filter(c => !evidence.has(c) && !flightEnds.has(c));
+    const lostBills = [...billCountries].filter(c => !will.has(c));
+    if (added.length || lostBills.length) conflicts.push({ d, was: [...evidence], bills: [...billCountries], added, will: [...will] });
   });
   // the days either side of the flight: he must be in the departure country the day before
   // (unless another flight brings him there) and in the arrival country the day after (unless he flies on)
   const edges = [];
-  const countriesOn = d => new Set(trips.filter(t => overlapDays(t.entry, t.exit, d, d) > 0).map(t => t.country));
+  const countriesOn = d => {
+    const c = new Set(trips.filter(t => !t.derived && overlapDays(t.entry, t.exit, d, d) > 0).map(t => t.country));
+    expenses.forEach(ex => { if (ex.date && billCoversDay(ex, d)) { const t = tripById.get(ex.tripId); if (t) c.add(t.country); } });
+    return c;
+  };
   const dep = parseDate(cand.depDate), arr = parseDate(cand.arrDate);
   const dayBefore = countriesOn(dep - DAYMS);
   const flewIn = legs.some(l => l.to === cand.from && (parseDate(l.arrDate || l.depDate) === dep || parseDate(l.arrDate || l.depDate) === dep - DAYMS));
@@ -4396,7 +4442,7 @@ function flightChangesHistory(it) {
     if (g && g.sig === sig && c.d - g.to === DAYMS) { g.to = c.d; g.bills = g.bills || c.bills.length > 0; }
     else groups.push({ sig, from: c.d, to: c.d, was: c.was, will: c.will, bills: c.bills.length > 0 });
   });
-  const text = 'This flight would change days already on the calendar: ' + groups.slice(0, 3).map(g =>
+  const text = 'This flight clashes with bills or trips already in the ledger: ' + groups.slice(0, 3).map(g =>
       (g.from === g.to ? fmtD(g.from) : fmtD(g.from) + ' – ' + fmtD(g.to)) + ' shows ' + g.was.join(' + ') + (g.bills ? ' (bills there)' : '') +
       ' \u2192 would show ' + (g.will.length ? g.will.join(' + ') : 'nothing')).join('; ') + (groups.length > 3 ? '; and more' : '') + '.' + (similarText ? ' ' + similarText : '') + (edges.length ? ' Also: ' + edges.join('; ') + '.' : '');
   return { text, days: conflicts.length, similarId: similar ? similar.id : null };
@@ -4448,7 +4494,8 @@ function importStatus(it) {
     const arriving = legs.some(l => l.to === it.country && (l.arrDate === ds || l.depDate === ds)) ||
       importItems.some(o => o.kind === 'flight' && o.to === it.country && (o.arrDate === ds || o.depDate === ds));
     if (arriving) continue;
-    trips.filter(t => t.country !== it.country && overlapDays(t.entry, t.exit, d, d) > 0).forEach(t => clashes.set(t.id, t));
+    trips.filter(t => t.country !== it.country && overlapDays(t.entry, t.exit, d, d) > 0 && (!t.derived || expenses.some(ex => ex.tripId === t.id && ex.date && billCoversDay(ex, d))))
+      .forEach(t => clashes.set(t.id, t));
   }
   if (clashes.size) return { code: 'overlap', text: 'Overlaps: ' + [...clashes.values()].map(t => tripPlaceLabel(t) + ' ' + t.entry + ' → ' + t.exit).join('; ') };
   return { code: 'new', text: 'New' };
