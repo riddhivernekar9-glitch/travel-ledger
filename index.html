@@ -231,6 +231,7 @@
 
   <div class="step">
     <h2>Your day counts</h2>
+    <div id="limitAlerts"></div>
     <div class="board" id="board"></div>
     <details id="rulesSection" style="margin-top:14px;">
       <summary class="hint" style="cursor:pointer; font-size:12px; color:var(--ink);">How each country counts days &mdash; rules checked <span id="rulesCheckedLabel"></span></summary>
@@ -245,6 +246,17 @@
         <p>These counts are a guide for his tax adviser, who should confirm residence each year. A monthly check looks for rule changes; a change is applied from the date it starts, so earlier years keep the rule that applied then.</p>
       </div>
     </details>
+  </div>
+
+  <div class="step" id="plannerStep">
+    <h2>Can I go? &mdash; plan a trip</h2>
+    <p class="hint" style="margin:0 0 6px;">Try a trip before booking it: see what it does to every limit. Add several stops for a multi-country trip. Nothing is saved.</p>
+    <div id="plannerRows"></div>
+    <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">
+      <button type="button" class="btn-secondary" id="planAddStop">+ add another stop</button>
+      <button type="button" class="btn-primary" id="planCheck">Check this trip</button>
+    </div>
+    <div id="plannerResult"></div>
   </div>
 
   <div class="step">
@@ -1607,12 +1619,139 @@ function renderYearJumpButtons() {
   });
 }
 
+// ================= early warnings (top of the cards) =================
+// Today's position on every limit, in plain words: only what needs attention is listed.
+function renderLimitAlerts() {
+  const el = document.getElementById('limitAlerts');
+  if (!el) return;
+  const today = parseDate(new Date().toISOString().slice(0, 10));
+  const strip = h => String(h || '').replace(/<[^>]+>/g, '');
+  const items = [];
+  computeStats(today).forEach(s => {
+    if (s.direction === 'atLeast') {
+      if (s.statusClass !== 'ok') items.push({ lvl: s.statusClass === 'warn' ? 'warn' : 'info', text: s.title + ': ' + s.used + ' of ' + s.threshold + ' days in the last 12 months — ' + s.leftCount + ' more needed to qualify.' });
+      return;
+    }
+    if (s.statusClass === 'over') {
+      const hit = (s.lines || []).map(strip).find(l => /reached|over|met|183\+/i.test(l));
+      items.push({ lvl: 'over', text: s.title + ': ' + s.used + ' of ' + s.threshold + ' — limit reached' + (hit ? ' (' + hit.replace(/\.$/, '') + ')' : '') + '.' });
+    } else if (s.statusClass === 'warn') {
+      items.push({ lvl: 'warn', text: s.title + ': ' + s.used + ' of ' + s.threshold + ' — only ' + s.leftCount + ' ' + s.leftText + '.' + (s.resetInfo ? ' ' + strip(s.resetInfo) : '') });
+    }
+  });
+  const col = { over: 'var(--red)', warn: 'var(--amber)', info: 'var(--ink-soft)' }, icon = { over: '⛔', warn: '⚠️', info: 'ℹ️' };
+  el.innerHTML = items.length
+    ? '<div class="print-note-box" style="margin:0 0 12px; border-color:' + col[items.some(i => i.lvl === 'over') ? 'over' : items.some(i => i.lvl === 'warn') ? 'warn' : 'info'] + ';">' +
+      '<strong>Today</strong>' + items.map(i => '<div style="margin-top:4px; color:' + col[i.lvl] + ';">' + icon[i.lvl] + ' ' + escHtml(i.text) + '</div>').join('') + '</div>'
+    : '<div class="print-note-box" style="margin:0 0 12px; border-color:var(--green); color:var(--green);">✓ Today every limit is comfortably within range.</div>';
+}
+
+// ================= "Can I go?" trip planner (what-if, nothing is saved) =================
+function planImpact(stops) {
+  const plan = stops.map((s, i) => ({ id: 'plan-' + i, country: s.country, region: mapCountryToRegion(s.country), state: '', entry: s.from, exit: s.to }));
+  const start = Math.min(...stops.map(s => parseDate(s.from))), end = Math.max(...stops.map(s => parseDate(s.to)));
+  const years = []; for (let y = new Date(start).getUTCFullYear(); y <= new Date(end).getUTCFullYear(); y++) years.push(y);
+  const yS = y => Date.UTC(y, 0, 1), yE = y => Date.UTC(y, 11, 31);
+  const calc = () => {
+    const pm = presenceMap(), r = {};
+    // Schengen: the highest 180-day count on any day of the trip
+    const sch = new Set(countedDays(pm, c => mapCountryToRegion(c) === 'Schengen', 'anyPart'));
+    const roll = e => { let n = 0; for (let d = e - 179 * DAY_MS; d <= e; d += DAY_MS) if (sch.has(d)) n++; return n; };
+    r.sch = { max: 0, firstOver: null };
+    for (let d = start; d <= end; d += DAY_MS) { const n = roll(d); if (n > r.sch.max) r.sch.max = n; if (n > 90 && !r.sch.firstOver) r.sch.firstOver = d; }
+    // UK: each tax year the trip touches
+    const uk = countedDays(pm, c => c === 'United Kingdom', 'midnight');
+    r.uk = [];
+    for (let d = start; d <= end; d += DAY_MS) { const t = ukTaxYearRange(d); if (!r.uk.some(x => x.label === t.label)) r.uk.push({ label: t.label, used: inRange(uk, t.start, t.end).length, hit: nthDay(uk, t.start, t.end, ukThresh), hit183: nthDay(uk, t.start, t.end, 183) }); }
+    // calendar-year rules
+    const it = countedDays(pm, c => c === 'Italy', 'anyPart'), cy = countedDays(pm, c => c === 'Cyprus', 'cyprus'), us = countedDays(pm, c => mapCountryToRegion(c) === 'US', 'anyPart');
+    r.italy = years.map(y => { const L = isLeapYear(y) ? 184 : 183; return { y, used: inRange(it, yS(y), yE(y)).length, lim: L, hit: nthDay(it, yS(y), yE(y), L) }; });
+    r.cyprus = years.map(y => ({ y, used: inRange(cy, yS(y), yE(y)).length, lim: 184, hit: nthDay(cy, yS(y), yE(y), 184) }));
+    r.us = years.map(y => {
+      const cur = inRange(us, yS(y), yE(y)), p1 = inRange(us, yS(y - 1), yE(y - 1)).length, p2 = inRange(us, yS(y - 2), yE(y - 2)).length;
+      const w = cur.length + p1 / 3 + p2 / 6, need = Math.max(31, Math.ceil(183 - p1 / 3 - p2 / 6));
+      return { y, cur: cur.length, w: Math.floor(w * 10) / 10, met: cur.length >= 31 && w >= 183, metOn: cur[need - 1] || null };
+    });
+    // UAE: the 12 months up to the end of the trip
+    const ae = countedDays(pm, c => mapCountryToRegion(c) === 'UAE', 'anyPart');
+    r.uae = inRange(ae, end - 364 * DAY_MS, end).length;
+    return r;
+  };
+  const before = calc();
+  const saved = trips;
+  trips = trips.concat(plan);
+  let after;
+  try { after = calc(); } finally { trips = saved; }
+  return { before, after, start, end };
+}
+function renderPlanResult(res) {
+  const { before: b, after: a } = res;
+  const rows = [];
+  const row = (title, was, now, lim, status, note) => rows.push({ title, was, now, lim, status, note, changed: String(was) !== String(now) });
+  const inTrip = d => d && d >= res.start && d <= res.end;
+  row('Schengen (highest in any 180 days during the trip)', b.sch.max, a.sch.max, 90, a.sch.max > 90 ? 'over' : a.sch.max >= 75 ? 'warn' : 'ok',
+    a.sch.firstOver ? 'Day 91 would be ' + niceDate(a.sch.firstOver) + ': leave by ' + niceDate(a.sch.firstOver - DAY_MS) + '.' : '');
+  a.uk.forEach((t, i) => {
+    const bt = b.uk[i];
+    const note = t.used >= 183 ? '183+ days: automatically UK resident this tax year.'
+      : inTrip(t.hit) && !(bt && bt.hit) ? 'Reaches ' + ukThresh + ' on ' + niceDate(t.hit) + ': leave by ' + niceDate(t.hit - DAY_MS) + ' to stay under.' : '';
+    row('UK, tax year ' + t.label + ' (midnights)', bt ? bt.used : 0, t.used, ukThresh, t.used >= 183 ? 'over' : t.used >= ukThresh ? 'over' : t.used >= ukThresh * 0.75 ? 'warn' : 'ok', note);
+  });
+  a.us.forEach((u, i) => row('US ' + u.y + ' (weighted; ' + u.cur + ' days this year)', b.us[i].w, u.w, 183, u.met ? 'over' : u.w >= 150 ? 'warn' : 'ok',
+    u.met && !b.us[i].met ? 'Substantial presence test would be met on ' + niceDate(u.metOn) + '.' : ''));
+  a.italy.forEach((x, i) => row('Italy ' + x.y, b.italy[i].used, x.used, x.lim, x.hit ? 'over' : x.used >= 150 ? 'warn' : 'ok', x.hit && !b.italy[i].hit ? 'Reaches ' + x.lim + ' on ' + niceDate(x.hit) + '.' : ''));
+  a.cyprus.forEach((x, i) => row('Cyprus ' + x.y + ' (departure day not counted)', b.cyprus[i].used, x.used, 183, x.hit ? 'over' : x.used >= 150 ? 'warn' : 'ok', x.hit && !b.cyprus[i].hit ? 'Over 183 on ' + niceDate(x.hit) + '.' : ''));
+  row('UAE (12 months to the end of the trip; needs ' + uaeThresh + ')', b.uae, a.uae, uaeThresh, a.uae >= uaeThresh ? 'ok' : a.uae >= uaeThresh - 30 ? 'warn' : 'over', a.uae < uaeThresh ? (uaeThresh - a.uae) + ' short of the ' + uaeThresh + '-day route.' : '');
+  const col = { ok: 'var(--green)', warn: 'var(--amber)', over: 'var(--red)' }, word = { ok: 'fine', warn: 'close', over: 'over' };
+  const worst = rows.filter(r => r.changed || /UAE/.test(r.title)).reduce((w, r) => r.status === 'over' && !/UAE/.test(r.title) ? 'over' : w === 'over' ? w : r.status === 'warn' && !/UAE/.test(r.title) ? 'warn' : w, 'ok');
+  const headline = worst === 'over' ? '⛔ This trip would take him over a limit.' : worst === 'warn' ? '⚠️ OK, but it brings him close to a limit.' : '✓ Safe: no limit is reached with this trip.';
+  return '<div class="print-note-box" style="margin-top:10px; border-color:' + col[worst] + ';"><strong style="color:' + col[worst] + ';">' + headline + '</strong>' +
+    '<table class="ledger" style="margin-top:8px; font-size:12px;"><thead><tr><th>Limit</th><th>Now</th><th>With trip</th><th>Limit</th><th></th></tr></thead><tbody>' +
+    rows.map(r => '<tr style="' + (r.changed ? '' : 'color:var(--ink-soft);') + '"><td>' + escHtml(r.title) + (r.note ? '<div class="hint" style="color:' + col[r.status] + ';">' + escHtml(r.note) + '</div>' : '') + '</td><td>' + r.was + '</td><td><b>' + r.now + '</b></td><td>' + r.lim + '</td><td style="color:' + col[r.status] + ';">' + (/UAE/.test(r.title) ? (r.status === 'ok' ? 'met' : 'short') : r.changed ? word[r.status] : 'no change') + '</td></tr>').join('') +
+    '</tbody></table><div class="hint" style="margin-top:6px;">A what-if only: nothing is saved. Counts include trips already logged for later dates. Same rules as the cards above.</div></div>';
+}
+function planRowHtml(i, s) {
+  return '<div class="plan-row" data-plan-row="' + i + '" style="display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-top:6px;">' +
+    '<select data-plan="country" style="max-width:190px;">' + WORLD_COUNTRIES.map(c => '<option' + (c === s.country ? ' selected' : '') + '>' + escHtml(c) + '</option>').join('') + '</select>' +
+    '<span class="hint">from</span><input type="date" data-plan="from" value="' + (s.from || '') + '" style="width:auto;">' +
+    '<span class="hint">to</span><input type="date" data-plan="to" value="' + (s.to || '') + '" style="width:auto;">' +
+    (i > 0 ? '<button type="button" class="btn-secondary hc-btn" data-plan-del="' + i + '">remove</button>' : '') + '</div>';
+}
+let planStops = [{ country: 'United Kingdom', from: '', to: '' }];
+function renderPlanner() {
+  const el = document.getElementById('plannerRows');
+  if (!el) return;
+  el.innerHTML = planStops.map((s, i) => planRowHtml(i, s)).join('');
+  el.querySelectorAll('[data-plan-row]').forEach(r => {
+    const i = +r.dataset.planRow;
+    r.querySelectorAll('[data-plan]').forEach(inp => inp.onchange = () => {
+      planStops[i][inp.dataset.plan] = inp.value;
+      // the next stop starts where this one ends
+      if (inp.dataset.plan === 'to' && planStops[i + 1] && !planStops[i + 1].from) { planStops[i + 1].from = inp.value; renderPlanner(); }
+    });
+    const del = r.querySelector('[data-plan-del]');
+    if (del) del.onclick = () => { planStops.splice(i, 1); renderPlanner(); };
+  });
+}
+function initPlanner() {
+  renderPlanner();
+  document.getElementById('planAddStop').onclick = () => { const last = planStops[planStops.length - 1]; planStops.push({ country: last.country, from: last.to || '', to: '' }); renderPlanner(); };
+  document.getElementById('planCheck').onclick = () => {
+    const out = document.getElementById('plannerResult');
+    const stops = planStops.filter(s => s.country && s.from && s.to);
+    if (!stops.length) { out.innerHTML = '<div class="hint" style="color:var(--red); margin-top:8px;">Pick a country and both dates.</div>'; return; }
+    if (stops.some(s => s.to < s.from)) { out.innerHTML = '<div class="hint" style="color:var(--red); margin-top:8px;">A stop ends before it starts.</div>'; return; }
+    out.innerHTML = renderPlanResult(planImpact(stops));
+  };
+}
+
 function renderBoard() {
   const asof = parseDate(document.getElementById('asof').value);
   const board = document.getElementById('board');
   board.innerHTML = '';
   const stats = computeStats(asof);
   stats.forEach(s => board.appendChild(makeStub(s)));
+  renderLimitAlerts();
   const rl = document.getElementById('rulesCheckedLabel');
   if (rl) {
     rl.textContent = niceDate(parseDate(RULES_CHECKED));
@@ -3814,7 +3953,7 @@ async function cleanupLegacyUndoFields() {
 // A tab left open keeps running the old version after an update is uploaded, so new bills can
 // miss newer features (e.g. a type that didn't exist yet). Every few minutes, and whenever the
 // tab comes back into view, compare this page's version with the one that's live.
-const APP_VERSION = '2026-10-19i';
+const APP_VERSION = '2026-10-19j';
 async function checkForNewerVersion() {
   try {
     const res = await fetch(location.href.split('#')[0], { cache: 'no-store' });
@@ -5132,6 +5271,7 @@ async function initLedger() {
   await cleanupLegacyUndoFields();
   await loadAll();
   renderEncryptionStatus();
+  initPlanner();
   document.getElementById('loadstatus').textContent = storageMode === 'firebase' ? 'live \u2014 saved to Firebase' : 'no connection to Firebase \u2014 check your config and internet connection';
   if (trips.length === 0 && legs.length === 0 && expenses.length === 0) document.getElementById('freshFileBanner').style.display = 'block';
   renderAll();
