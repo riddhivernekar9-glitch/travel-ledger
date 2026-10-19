@@ -3581,7 +3581,7 @@ async function cleanupLegacyUndoFields() {
 // A tab left open keeps running the old version after an update is uploaded, so new bills can
 // miss newer features (e.g. a type that didn't exist yet). Every few minutes, and whenever the
 // tab comes back into view, compare this page's version with the one that's live.
-const APP_VERSION = '2026-10-16i';
+const APP_VERSION = '2026-10-19a';
 async function checkForNewerVersion() {
   try {
     const res = await fetch(location.href.split('#')[0], { cache: 'no-store' });
@@ -3664,7 +3664,7 @@ function findDates(text) {
 }
 
 // three-letter airport codes in a line: "(DXB)" anywhere, or bare "DXB" on a line that has a flight number
-const FLIGHT_NO = /\b(EK|EY|QR|BA|VS|KL|AF|LH|LX|OS|AZ|IB|TP|SN|SK|AY|EI|TK|A3|OA|CY|FZ|G9|WY|GF|SV|MS|RJ|ME|KQ|ET|SA|QF|SQ|CX|NH|JL|KE|OZ|MH|TG|GA|PR|5J|VN|AI|UK|UL|AA|UA|DL|B6|AS|WN|AC|AM|CM|LA|AV|U2|FR|W6|VY|EW|DE|LS|BY|TOM|HV|DY|D8)\s?0*\d{1,4}\b/;
+const FLIGHT_NO = /(?<!(?:[Aa]irbus|AIRBUS|[Aa]ircraft|AIRCRAFT|[Ee]quipment|EQUIPMENT|[Pp]lane|PLANE)[:\s-]*)\b(?!A3\d\d(?![\d]))(EK|EY|QR|BA|VS|KL|AF|LH|LX|OS|AZ|IB|TP|SN|SK|AY|EI|TK|A3|OA|CY|FZ|G9|WY|GF|SV|MS|RJ|ME|KQ|ET|SA|QF|SQ|CX|NH|JL|KE|OZ|MH|TG|GA|PR|5J|VN|AI|UK|UL|AA|UA|DL|B6|AS|WN|AC|AM|CM|LA|AV|U2|FR|W6|VY|EW|DE|LS|BY|TOM|HV|DY|D8)\s?0*\d{1,4}\b/;
 // 3-letter codes that are also ordinary words or abbreviations, only trusted in brackets or next to a flight number
 const CODE_WORDS = new Set(['MAN', 'LOS', 'ADD', 'DEL', 'SAN', 'SEA', 'PER', 'INN', 'MAD', 'LAS', 'GOA', 'BOS', 'STR', 'FAO', 'DUB', 'HAM', 'BER', 'NAS', 'MEL', 'CAG', 'LIN', 'OLB', 'TPA', 'ORD', 'SIN', 'CAI', 'PER', 'LIS', 'AMS', 'DEN', 'ATH', 'BAH', 'MIA', 'KIX']);
 function airportsIn(line, loose) {
@@ -3685,7 +3685,7 @@ function airportsIn(line, loose) {
 // "15MAR" / "15 Mar" with no year (boarding passes): the most recent such date, up to two months ahead
 function yearlessDates(text) {
   const out = [];
-  const re = /\b(\d{1,2})\s?(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b(?![\s\-\.,]*\d)/gi;
+  const re = /\b(\d{1,2})\s?(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b(?![\s\-\.,]*(?:\d{4}|\d{2})(?![:.h]?\d))/gi;   // not followed by a year (a time like 07:05 is fine)
   const now = new Date(), limit = Date.now() + 60 * 86400000;
   let m;
   while ((m = re.exec(text))) {
@@ -3715,7 +3715,9 @@ function parseFlights(lines) {
     while (b - 1 >= floor && s - (b - 1) <= 2 && useful(lines[b - 1])) b--;
     return b;
   });
-  const blocks = starts.length
+  const blocks = starts.length === 1 && lines.length <= 40
+    ? [lines]
+    : starts.length
     ? starts.map((s, k) => lines.slice(segStart[k], Math.min(k + 1 < starts.length ? segStart[k + 1] : lines.length, s + 6)))
     : lines.map((l, i) => lines.slice(i, i + 3));
   blocks.forEach(block => {
@@ -3749,7 +3751,7 @@ function parseFlights(lines) {
     seen.add(key);
     const [fromCity, fromCountry] = AIRPORTS[codes[0]], [toCity, toCountry] = AIRPORTS[codes[1]];
     const fno = (text.match(FLIGHT_NO) || [''])[0].replace(/\s+/g, '');
-    flights.push({ kind: 'flight', depDate: dep, arrDate: arr, from: fromCountry, depCity: fromCity, to: toCountry, arrCity: toCity, fromCode: codes[0], toCode: codes[1], flightNo: fno, yearGuessed });
+    flights.push({ kind: 'flight', depDate: dep, arrDate: arr, from: fromCountry, depCity: fromCity, to: toCountry, arrCity: toCity, fromCode: codes[0], toCode: codes[1], flightNo: fno, yearGuessed, raw: block.join(' \u00b7 ').replace(/\s+/g, ' ').slice(0, 220) });
   });
   return flights;
 }
@@ -3801,8 +3803,12 @@ function parseHotels(lines, knownCountries) {
 }
 
 // lines of text from one PDF -> { flights, hotels }
+function fixOcrMonths(l) {
+  return l.replace(/(\d)\s?0(CT|ct)\b/g, '$1 O$2').replace(/\bN0V\b/g, 'NOV').replace(/(\d)\s?N0V\b/g, '$1 NOV').replace(/(\d)\s?(JU|AP)[1lI|](\b)/g, (m, d, a) => d + ' ' + a + (a === 'JU' ? 'L' : 'R'))
+    .replace(/(\d)\s?([A-Z]{3})(?=\b)/g, (m, d, mon) => /^(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)$/.test(mon) ? d + ' ' + mon : m);
+}
 function parseBookingText(lines, knownCountries) {
-  const clean = lines.map(l => l.replace(/\s+/g, ' ').trim()).filter(Boolean);
+  const clean = lines.map(l => fixOcrMonths(l.replace(/\s+/g, ' ').trim())).filter(Boolean);
   const flights = parseFlights(clean);
   let hotels = parseHotels(clean, knownCountries);
   if (flights.length && !/check[\s-]?in/i.test(clean.join(' '))) hotels = [];
@@ -3881,10 +3887,112 @@ async function getOcrWorker(onProgress) {
   });
   return ocrWorker;
 }
+// Phone photos need preparing first: they're large (12 MP), often stored sideways with a note
+// saying which way is up (the recogniser ignores that note), and unevenly lit. So the photo is
+// drawn upright onto a canvas at a sensible size, turned to grey and its contrast evened out.
+// If that reading still has no dates / airports / amounts, the other three turns and a
+// "scattered text" mode (boarding passes are laid out in boxes) are tried, and the best kept.
+async function photoToCanvas(file, maxSide) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = new Image();
+    img.src = url;
+    await img.decode();                       // browsers draw <img> upright (EXIF orientation applied)
+    const w0 = img.naturalWidth, h0 = img.naturalHeight;
+    const k = Math.min(1, maxSide / Math.max(w0, h0));
+    const c = document.createElement('canvas');
+    c.width = Math.round(w0 * k); c.height = Math.round(h0 * k);
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(img, 0, 0, c.width, c.height);
+    // grey + local contrast: divide by a blurred copy (removes shadows / glare), then stretch
+    const id = ctx.getImageData(0, 0, c.width, c.height), px = id.data, n = c.width * c.height;
+    const g = new Float32Array(n);
+    for (let i = 0; i < n; i++) g[i] = 0.299 * px[i * 4] + 0.587 * px[i * 4 + 1] + 0.114 * px[i * 4 + 2];
+    const small = document.createElement('canvas'), sw = Math.max(8, Math.round(c.width / 24)), sh = Math.max(8, Math.round(c.height / 24));
+    small.width = sw; small.height = sh;
+    const sctx = small.getContext('2d', { willReadFrequently: true });
+    sctx.filter = 'blur(2px)'; sctx.drawImage(c, 0, 0, sw, sh);
+    const bg = sctx.getImageData(0, 0, sw, sh).data;
+    const out = new Float32Array(n);
+    for (let y = 0; y < c.height; y++) for (let x = 0; x < c.width; x++) {
+      const bi = (Math.min(sh - 1, Math.floor(y * sh / c.height)) * sw + Math.min(sw - 1, Math.floor(x * sw / c.width))) * 4;
+      const b = 0.299 * bg[bi] + 0.587 * bg[bi + 1] + 0.114 * bg[bi + 2];
+      out[y * c.width + x] = Math.min(255, g[y * c.width + x] / Math.max(b, 1) * 235);
+    }
+    let lo = 255, hi = 0;
+    for (let i = 0; i < n; i += 7) { if (out[i] < lo) lo = out[i]; if (out[i] > hi) hi = out[i]; }
+    const span = Math.max(30, hi - lo);
+    for (let i = 0; i < n; i++) { const v = Math.max(0, Math.min(255, (out[i] - lo) * 255 / span)); px[i * 4] = px[i * 4 + 1] = px[i * 4 + 2] = v; px[i * 4 + 3] = 255; }
+    ctx.putImageData(id, 0, 0);
+    return c;
+  } finally { URL.revokeObjectURL(url); }
+}
+function turnCanvas(src, quarter) {
+  const c = document.createElement('canvas');
+  const odd = quarter % 2 === 1;
+  c.width = odd ? src.height : src.width; c.height = odd ? src.width : src.height;
+  const ctx = c.getContext('2d');
+  ctx.translate(c.width / 2, c.height / 2); ctx.rotate(quarter * Math.PI / 2);
+  ctx.drawImage(src, -src.width / 2, -src.height / 2);
+  return c;
+}
+// Rebuild the reading from where each word sits on the page: rows top to bottom, words left to
+// right (like the PDF reader). A boarding pass is laid out in boxes, and the recogniser's own reading
+// order can jump between them ("LONDON HEATHROW" before "DUBAI"); the page position doesn't.
+function wordsToLines(data) {
+  const words = (data.words || []).filter(w => w.text && w.text.trim() && w.bbox && (w.confidence == null || w.confidence > 15 || w.text.length > 2));
+  if (!words.length) return (data.text || '').split('\n');
+  const hOf = w => w.bbox.y1 - w.bbox.y0;
+  // tilt of the photo: the slope of the recogniser's own text lines (median of the wider ones)
+  const slopes = [];
+  (data.lines || []).forEach(l => {
+    const ws = (l.words || []).filter(w => w.bbox);
+    if (ws.length < 2) return;
+    const a = ws[0].bbox, b = ws[ws.length - 1].bbox;
+    const dx = (b.x0 + b.x1) / 2 - (a.x0 + a.x1) / 2, dy = (b.y0 + b.y1) / 2 - (a.y0 + a.y1) / 2;
+    const t = Math.atan2(dy, dx);
+    if (dx > 3 * (a.y1 - a.y0) && Math.abs(t) < 0.26) slopes.push(t);   // a tilted photo, not a sideways one (turns are tried separately)
+  });
+  slopes.sort((a, b) => a - b);
+  const ang = slopes.length ? slopes[Math.floor(slopes.length / 2)] : 0;
+  const cos = Math.cos(-ang), sin = Math.sin(-ang);
+  const pts = words.map(w => {
+    const cx = (w.bbox.x0 + w.bbox.x1) / 2, cy = (w.bbox.y0 + w.bbox.y1) / 2;
+    return { w, x: cx * cos - cy * sin, y: cx * sin + cy * cos, h: hOf(w) };
+  });
+  const rows = [];
+  pts.sort((a, b) => a.y - b.y).forEach(p => {
+    const row = rows.find(r => Math.abs(r.y - p.y) < Math.max(p.h, r.h) * 0.55);
+    if (row) { row.pts.push(p); row.y = (row.y * (row.pts.length - 1) + p.y) / row.pts.length; row.h = Math.max(row.h, p.h); }
+    else rows.push({ y: p.y, h: p.h, pts: [p] });
+  });
+  return rows.sort((a, b) => a.y - b.y).map(r => r.pts.sort((a, b) => a.x - b.x).map(p => p.w.text).join(' '));
+}
+// how much a reading looks like a booking / bill: dates, airport codes, flight numbers, amounts
+function readingScore(lines) {
+  const text = lines.join('\n');
+  return findDates(text).length * 3 + yearlessDates(text).length * 2 + lines.reduce((n, l) => n + airportsIn(l, true).length, 0) * 2 +
+    lines.filter(l => FLIGHT_NO.test(l)).length * 2 + lines.filter(l => /\d[.,]\d{2}\b/.test(l)).length + (text.match(/[A-Za-z]{3,}/g) || []).length * 0.05;
+}
 async function ocrImageToLines(file, onProgress) {
   const worker = await getOcrWorker(onProgress);
-  const { data } = await worker.recognize(file);
-  return (data.text || '').split('\n').map(l => l.replace(/\s+/g, ' ').trim()).filter(Boolean);
+  const toLines = t => (t || '').split('\n').map(l => l.replace(/\s+/g, ' ').trim()).filter(Boolean);
+  let canvas;
+  try { canvas = await photoToCanvas(file, 2200); }
+  catch (e) { const { data } = await worker.recognize(file); return toLines(data.text); }   // the browser couldn't draw it: read it as it is
+  const tries = [[0, '3'], [0, '11'], [1, '3'], [3, '3'], [2, '3'], [1, '11'], [3, '11']];
+  let best = null;
+  for (const [q, psm] of tries) {
+    if (onProgress) onProgress({ status: 'photo', step: tries.indexOf(tries.find(t => t[0] === q && t[1] === psm)) + 1 });
+    await worker.setParameters({ tessedit_pageseg_mode: psm });
+    const { data } = await worker.recognize(q ? turnCanvas(canvas, q) : canvas);
+    const lines = toLines(wordsToLines(data).join('\n')), score = readingScore(lines);
+    if (!best || score > best.score) best = { lines, score };
+    const r = parseBookingText(lines, WORLD_COUNTRIES);
+    if (r.flights.length || r.hotels.length || (parseReceipt(lines) && findDates(lines.join(' ')).length)) { best = { lines, score: 1e9 }; break; }   // good enough
+  }
+  await worker.setParameters({ tessedit_pageseg_mode: '3' });
+  return best.lines;
 }
 async function ocrPdfToLines(pdf, onProgress) {
   const worker = await getOcrWorker(onProgress);
@@ -4077,7 +4185,7 @@ function flightChangesHistory(it) {
   const dayAfter = countriesOn(arr + DAYMS);
   const flewOn = legs.some(l => l.from === cand.to && (parseDate(l.depDate) === arr || parseDate(l.depDate) === arr + DAYMS));
   if (dayAfter.size && !dayAfter.has(cand.to) && !flewOn) edges.push('the ledger has him in ' + [...dayAfter].join(' + ') + ' on ' + fmtD0(arr + DAYMS) + ', the day after this flight lands in ' + cand.to);
-  const similar = legs.find(l => l.from === it.from && l.to === it.to && l.depDate !== it.depDate && Math.abs(parseDate(l.depDate) - parseDate(it.depDate)) <= 5 * DAYMS);
+  const similar = legs.find(l => l.from === it.from && l.to === it.to && l.depDate !== it.depDate && Math.abs(parseDate(l.depDate) - parseDate(it.depDate)) <= 2 * DAYMS);
   const similarText = similar ? 'It looks like the same flight as the ' + similar.from + ' \u2192 ' + similar.to + ' already logged on ' + fmtD0(parseDate(similar.depDate)) +
     (similar.arrDate && similar.arrDate !== similar.depDate ? ' (arriving ' + fmtD0(parseDate(similar.arrDate)) + ')' : '') + '. This file says it left on ' + fmtD0(parseDate(cand.depDate)) +
     (cand.arrDate !== cand.depDate ? ' and arrived ' + fmtD0(parseDate(cand.arrDate)) : '') + '.' : '';
@@ -4176,6 +4284,7 @@ function renderImportReview() {
     const canAdd = it._status.code === 'overlap' || it._status.code === 'confirm';
     return '<div style="border-top:1px solid var(--line); padding:8px 0;">' + details +
       '<div class="hint" style="margin-top:4px;">' + dates + ' &middot; from ' + esc(it.file) + '</div>' +
+      (it.raw ? '<div class="hint" style="margin-top:2px;">Read from: \u201c' + esc(it.raw) + '\u201d</div>' : '') +
       '<div style="color:' + (canAdd ? 'var(--alert)' : 'var(--amber)') + '; font-size:12px; margin-top:4px;">' + esc(it._status.text) + '</div>' +
       '<div style="margin-top:6px;">' +
       (it._status.similarId ? '<button type="button" class="btn-primary hc-btn" data-imp-replace="' + i + '">Use these dates instead (correct the logged flight)</button>' : '') +
@@ -4232,6 +4341,7 @@ async function readPdfFiles(files) {
     if (m.status === 'page') status.textContent = 'Reading ' + name + ' — page ' + m.page + ' of ' + m.pages + '…';
     else if (/loading/.test(m.status) && m.progress != null) status.textContent = 'Preparing text recognition (first time only)… ' + Math.round(m.progress * 100) + '%';
     else if (/recogni/.test(m.status) && m.progress != null) status.textContent = 'Reading ' + name + '… ' + Math.round(m.progress * 100) + '%';
+    else if (m.status === 'photo' && m.step > 1) status.textContent = 'Reading ' + name + ' — trying another way (' + m.step + ' of 7)…';
   };
   // flights and hotel stays first; if a document has neither, it's read as a bill / receipt
   const readItems = lines => {
