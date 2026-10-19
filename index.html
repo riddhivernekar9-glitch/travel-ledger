@@ -806,7 +806,8 @@ let dayNotes = {}; // e.g. { '2026-06-12': 'Miami' } -- a pure display label for
                     // never changes which trip, country, or day-count anything belongs to.
 let storageOk = true;
 let storageMode = 'none';
-let ukThresh = 16;
+let ukThresh = 16;   // old single setting; only used until UK ties are answered (see ukAssess)
+let ukTies = {};     // UK ties answers per tax year, e.g. { '2026/27': { prior, family, home, workDays, ftAbroad } }
 let uaeThresh = 90;
 let calYear = new Date().getUTCFullYear();
 let calMonth = new Date().getUTCMonth();
@@ -1165,12 +1166,13 @@ async function loadAll() {
   try { const v = await storageGetRaw('day-notes'); dayNotes = v ? JSON.parse(v) : {}; } catch (e) { dayNotes = {}; }
   try { const v = await storageGetRaw('reviewed-checks'); reviewedChecks = v ? JSON.parse(v) : []; } catch (e) { reviewedChecks = []; }
   try { const t = await storageGetRaw('uk-threshold'); if (t) ukThresh = Number(t); } catch (e) {}
+  try { const v = await storageGetRaw('uk-ties'); ukTies = v ? JSON.parse(v) : {}; } catch (e) { ukTies = {}; }
   try { const t = await storageGetRaw('uae-threshold'); if (t) uaeThresh = Number(t); } catch (e) {}
   // undo/redo history is loaded separately, after the page is on screen (see loadUndoRedoLater)
 }
 
 function snapshotState() {
-  return JSON.stringify({ trips, legs, expenses, ukThresh, uaeThresh, dayNotes });
+  return JSON.stringify({ trips, legs, expenses, ukThresh, uaeThresh, dayNotes, ukTies });
 }
 
 // ================= automatic daily backups (separate from undo/redo) =================
@@ -1189,7 +1191,7 @@ async function writeBackupNow(reason) {
   try {
     const { db, doc, setDoc } = window.__fb;
     const dateStr = new Date().toISOString().slice(0, 10);
-    const payload = { trips, legs, expenses, ukThresh, uaeThresh, dayNotes, savedAt: new Date().toISOString(), reason: reason || 'auto' };
+    const payload = { trips, legs, expenses, ukThresh, uaeThresh, dayNotes, ukTies, savedAt: new Date().toISOString(), reason: reason || 'auto' };
     await setDoc(doc(db, 'ledgerBackups', dateStr), cryptoKey
       ? { enc: await encryptStr(JSON.stringify(payload)), savedAt: payload.savedAt, reason: payload.reason }
       : payload);
@@ -1272,8 +1274,8 @@ async function performUndo() {
   if (logTimer) flushChangeLog();
   logTag = 'Undo';
   trips = prev.trips; legs = prev.legs; expenses = prev.expenses; dayNotes = prev.dayNotes || {};
-  ukThresh = prev.ukThresh; uaeThresh = prev.uaeThresh;
-  await Promise.all([saveTrips(), saveLegs(), saveExpenses(), saveUkThresh(ukThresh), saveUaeThresh(uaeThresh), saveDayNotes()]);
+  ukThresh = prev.ukThresh; uaeThresh = prev.uaeThresh; if (prev.ukTies) ukTies = prev.ukTies;
+  await Promise.all([saveTrips(), saveLegs(), saveExpenses(), saveUkThresh(ukThresh), saveUaeThresh(uaeThresh), saveDayNotes(), saveUkTies()]);
   await persistUndoRedo();
   renderAll();
   populateCloseYearSelect();
@@ -1299,8 +1301,8 @@ async function performRedo() {
   if (logTimer) flushChangeLog();
   logTag = 'Redo';
   trips = next.trips; legs = next.legs; expenses = next.expenses; dayNotes = next.dayNotes || {};
-  ukThresh = next.ukThresh; uaeThresh = next.uaeThresh;
-  await Promise.all([saveTrips(), saveLegs(), saveExpenses(), saveUkThresh(ukThresh), saveUaeThresh(uaeThresh), saveDayNotes()]);
+  ukThresh = next.ukThresh; uaeThresh = next.uaeThresh; if (next.ukTies) ukTies = next.ukTies;
+  await Promise.all([saveTrips(), saveLegs(), saveExpenses(), saveUkThresh(ukThresh), saveUaeThresh(uaeThresh), saveDayNotes(), saveUkTies()]);
   await persistUndoRedo();
   renderAll();
   populateCloseYearSelect();
@@ -1325,7 +1327,7 @@ function updateRedoButton() {
 // bill or note that was added, removed or changed is written down with the time and the signed-in
 // account. One small entry per change, encrypted like everything else, in one document per month
 // (ledgerData/changeLog-YYYY-MM), so two devices can never overwrite each other's entries.
-const LOG_KEYS = new Set(['trips-list', 'legs-list', 'expenses-list', 'day-notes', 'uk-threshold', 'uae-threshold']);
+const LOG_KEYS = new Set(['trips-list', 'legs-list', 'expenses-list', 'day-notes', 'uk-threshold', 'uae-threshold', 'uk-ties']);
 let logBase = null, logTimer = null, logTag = '';
 function logSetBase() { clearTimeout(logTimer); logTimer = null; logBase = snapshotState(); }
 function scheduleChangeLog() { if (logBase == null) return; clearTimeout(logTimer); logTimer = setTimeout(flushChangeLog, 2500); }
@@ -1363,6 +1365,11 @@ function describeChanges(a, b) {
     if ((na[k] || '') !== (nb[k] || '')) out.push('Day note ' + nd(k) + ': ' + (nb[k] ? '\u201c' + nb[k] + '\u201d' : 'removed'));
   });
   if (a.ukThresh !== b.ukThresh) out.push('UK day-count test changed: ' + a.ukThresh + ' \u2192 ' + b.ukThresh + ' days');
+  const ta = a.ukTies || {}, tb = b.ukTies || {};
+  [...new Set([...Object.keys(ta), ...Object.keys(tb)])].sort().forEach(k => {
+    const fa = ta[k] || {}, fb = tb[k] || {};
+    ['prior', 'family', 'home', 'workDays', 'ftAbroad'].forEach(f => { if (String(fa[f] == null ? '' : fa[f]) !== String(fb[f] == null ? '' : fb[f])) out.push('UK ties ' + k + ', ' + f + ': ' + (fa[f] == null || fa[f] === '' ? 'not answered' : fa[f]) + ' \u2192 ' + (fb[f] == null || fb[f] === '' ? 'not answered' : fb[f])); });
+  });
   if (a.uaeThresh !== b.uaeThresh) out.push('UAE route changed: ' + a.uaeThresh + ' \u2192 ' + b.uaeThresh + ' days');
   if (out.length > 300) out.splice(300, out.length - 300, '\u2026 and ' + (out.length - 300) + ' more');
   return out;
@@ -1399,7 +1406,7 @@ async function saveUkThresh(v) { ukThresh = Number(v); await storageSetRaw('uk-t
 async function saveUaeThresh(v) { uaeThresh = Number(v); await storageSetRaw('uae-threshold', String(uaeThresh)); }
 
 function exportBackup() {
-  const payload = { exportedAt: new Date().toISOString(), trips, legs, expenses, ukThresh, uaeThresh, dayNotes }; // dayNotes = per-day city labels; were missing from backups
+  const payload = { exportedAt: new Date().toISOString(), trips, legs, expenses, ukThresh, uaeThresh, dayNotes, ukTies }; // dayNotes = per-day city labels; were missing from backups
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -1435,6 +1442,7 @@ async function importBackupFile(file) {
   if (data.dayNotes && typeof data.dayNotes === 'object') { dayNotes = data.dayNotes; await saveDayNotes(); } // older backups have none: keep current labels
   await saveTrips(); await saveLegs(); await saveExpenses();
   await saveUkThresh(ukThresh); await saveUaeThresh(uaeThresh);
+  if (data.ukTies && typeof data.ukTies === 'object') { ukTies = data.ukTies; await saveUkTies(); }
   renderAll(); populateCloseYearSelect();
   document.getElementById('freshFileBanner').style.display = 'none';
   document.getElementById('backupStatus').textContent = 'Loaded ' + trips.length + ' trip(s), ' + legs.length + ' flight(s), ' + expenses.length + ' bill(s) from backup dated ' + (data.exportedAt || 'unknown') + '.';
@@ -1504,6 +1512,95 @@ function ledgerYears(asofYear) {
   return out;
 }
 
+// ================= UK statutory residence test, with ties =================
+// The day limit for the UK depends on his ties to the UK, so it is worked out per tax year:
+//  - 183+ midnights: always resident.
+//  - Automatically non-resident under 16 (if UK resident in any of the last 3 tax years) or under 46
+//    (if not), or under 91 when working full-time abroad with fewer than 31 UK work days.
+//  - Otherwise the number of ties decides (HMRC RDR3): leavers 16-45 days need 4, 46-90 need 3,
+//    91-120 need 2, 121-182 need 1; arrivers 16-45 are never resident, 46-90 need 4, 91-120 need 3,
+//    121-182 need 2. Ties: family, accommodation, work (40+ UK work days), 90-day (90+ midnights in
+//    either of the 2 previous tax years), and for leavers the country tie (most midnights in the UK).
+// Answers are kept per tax year; a year with no answers uses the latest earlier year's. An
+// unanswered tie counts as a tie (the safe side) and is shown as "assumed".
+function ukTaxYearByLabel(label) { return ukTaxYearRange(Date.UTC(Number(String(label).slice(0, 4)), 3, 6)); }
+function ukTiesFor(label) {
+  if (ukTies[label]) return Object.assign({}, ukTies[label], { from: label });
+  const earlier = Object.keys(ukTies).filter(k => k < label).sort().pop();
+  return earlier ? Object.assign({}, ukTies[earlier], { from: earlier }) : { from: null };
+}
+function ukAssess(label, pm) {
+  pm = pm || presenceMap();
+  const ty = ukTaxYearByLabel(label), y0 = ty.start;
+  const uk = countedDays(pm, c => c === 'United Kingdom', 'midnight');
+  const days = inRange(uk, ty.start, ty.end).length;
+  const prevDays = k => { const p = ukTaxYearRange(Date.UTC(new Date(y0).getUTCFullYear() - k, 3, 6)); return inRange(uk, p.start, p.end).length; };
+  const a = ukTiesFor(label), legacy = a.from == null;
+  // resident in any of the previous 3 tax years?
+  let prior, priorWhy;
+  if (!legacy && (a.prior === 'yes' || a.prior === 'no')) { prior = a.prior === 'yes'; priorWhy = 'as answered'; }
+  else if (legacy) { prior = ukThresh !== 46; priorWhy = 'from the earlier 16/46/91 setting'; }
+  else {
+    const p = [1, 2, 3].map(prevDays);
+    if (p.some(n => n >= 183)) { prior = true; priorWhy = 'worked out: 183+ midnights in one of those years'; }
+    else if (p.every(n => n < 16)) { prior = false; priorWhy = 'worked out: under 16 midnights in each of those years'; }
+    else { prior = true; priorWhy = 'not clear from the ledger, so assumed yes (the safer side)'; }
+  }
+  const ftAbroad = legacy ? ukThresh === 91 : !!a.ftAbroad;
+  const workDays = legacy || a.workDays == null || a.workDays === '' ? null : Number(a.workDays);
+  // the country tie: UK midnights at least as many as in any other single country
+  let maxOther = 0, maxOtherName = '';
+  const others = new Set(); for (let d = ty.start; d <= ty.end; d += DAY_MS) (pm.get(d) || []).forEach(c => { if (c !== 'United Kingdom') others.add(c); });
+  others.forEach(c => { const n = inRange(countedDays(pm, x => x === c, 'midnight'), ty.start, ty.end).length; if (n > maxOther) { maxOther = n; maxOtherName = c; } });
+  const p1 = prevDays(1), p2 = prevDays(2);
+  const fixedTies = [
+    { key: 'family', name: 'Family', has: legacy || a.family !== 'no', how: legacy || !a.family ? 'not answered: counted to be safe' : a.family === 'yes' ? 'yes' : 'no' },
+    { key: 'home', name: 'Accommodation', has: legacy || a.home !== 'no', how: legacy || !a.home ? 'not answered: counted to be safe' : a.home === 'yes' ? 'yes' : 'no' },
+    { key: 'work', name: 'Work (40+ UK work days)', has: workDays == null || workDays >= 40, how: workDays == null ? 'not answered: counted to be safe' : workDays + ' UK work day(s)' },
+    (() => {
+      // the ledger has to reach back to the start of the tax year two before this one to rule this tie out
+      const twoBack = ukTaxYearRange(Date.UTC(new Date(y0).getUTCFullYear() - 2, 3, 6)).start;
+      const covered = [...pm.keys()].some(d => d <= twoBack);
+      const has = p1 >= 90 || p2 >= 90 || !covered;
+      return { key: 'ninety', name: '90-day', has, how: 'previous two tax years: ' + p1 + ' and ' + p2 + ' midnights' + (!covered && p1 < 90 && p2 < 90 ? ' (the ledger doesn\u2019t go back that far: counted to be safe)' : '') };
+    })(),
+  ];
+  const countryTie = n => prior && n >= maxOther;
+  const tiesAt = n => fixedTies.filter(t => t.has).length + (countryTie(n) ? 1 : 0);
+  const need = n => prior ? (n <= 45 ? 4 : n <= 90 ? 3 : n <= 120 ? 2 : 1) : (n <= 45 ? 99 : n <= 90 ? 4 : n <= 120 ? 3 : 2);
+  const ftOk = ftAbroad && (workDays == null ? legacy : workDays < 31); // full-time work abroad needs under 31 UK work days
+  const autoOut = n => (prior ? n < 16 : n < 46) || (ftOk && n < 91);
+  const resident = n => n >= 183 ? true : autoOut(n) ? false : tiesAt(n) >= need(n);
+  let limit = 183; for (let n = 1; n <= 183; n++) if (resident(n)) { limit = n; break; }
+  const ties = fixedTies.concat(prior ? [{ key: 'country', name: 'Country', has: countryTie(days), how: 'UK ' + days + ' midnights vs ' + (maxOtherName ? maxOtherName + ' ' + maxOther : 'no other country') }] : []);
+  const nTies = tiesAt(days);
+  const isRes = resident(days);
+  const reason = days >= 183 ? 'automatically UK resident (183+ midnights)'
+    : autoOut(days) ? 'automatically non-resident (' + ((prior ? days >= 16 : days >= 46) ? 'full-time work abroad, under 91 days' : 'under ' + (prior ? 16 : 46) + ' midnights') + ')'
+    : nTies + ' tie(s); with ' + days + ' midnights ' + (prior ? 'a leaver' : 'an arriver') + ' needs ' + (need(days) > 5 ? 'more than 5 (cannot be resident)' : need(days)) + ' → ' + (isRes ? 'UK resident' : 'not UK resident');
+  const assumed = ties.filter(t => /not answered/.test(t.how)).length;
+  return { label, ty, days, limit, resident: isRes, reason, ties, nTies, prior, priorWhy, ftAbroad, workDays, from: a.from, assumed, hit: nthDay(uk, ty.start, ty.end, limit), hit183: nthDay(uk, ty.start, ty.end, 183) };
+}
+let ukTiesOpen = false;
+function ukTiesPanel(label) {
+  const r = ukAssess(label), a = ukTies[label] || {};
+  const inh = !ukTies[label] && r.from ? '<div class="hint" style="margin:4px 0;">No answers for ' + label + ' yet, so ' + r.from + '&rsquo;s are used. Changing any answer saves them for ' + label + '.</div>' : '';
+  const sel = (k, opts, v) => '<select class="mini" data-ukt="' + k + '" style="margin-top:2px;">' + opts.map(([val, txt]) => '<option value="' + val + '"' + (String(v == null ? '' : v) === val ? ' selected' : '') + '>' + txt + '</option>').join('') + '</select>';
+  const val = k => a[k] != null ? a[k] : (r.from && ukTies[r.from] ? ukTies[r.from][k] : undefined);
+  const yn = [['', 'not answered'], ['yes', 'yes'], ['no', 'no']];
+  return '<details class="stub-hist uk-ties"' + (ukTiesOpen ? ' open' : '') + '><summary>UK ties for ' + label + ' &middot; ' + r.nTies + ' tie(s)' + (r.assumed ? ', ' + r.assumed + ' assumed' : '') + '</summary>' + inh +
+    '<div class="hint" style="line-height:1.5;">' +
+    '<div style="margin-top:6px;"><b>UK resident in any of the 3 previous tax years?</b><br>' + sel('prior', [['', 'work it out'], ['yes', 'yes'], ['no', 'no']], val('prior')) + '<br><i>' + escHtml(r.priorWhy) + '</i></div>' +
+    '<div style="margin-top:6px;"><b>Family:</b> a spouse, civil partner or partner, or a child under 18, who is UK resident?<br>' + sel('family', yn, val('family')) + '</div>' +
+    '<div style="margin-top:6px;"><b>Accommodation:</b> a place to live in the UK available for 91+ days in a row, where he spent at least one night this tax year? (A close relative&rsquo;s home counts only with 16+ nights there.)<br>' + sel('home', yn, val('home')) + '</div>' +
+    '<div style="margin-top:6px;"><b>UK work days:</b> days with 3+ hours of work in the UK this tax year (40+ is a tie)<br><input type="number" min="0" class="mini" data-ukt="workDays" placeholder="not answered" value="' + (val('workDays') != null ? escHtml(val('workDays')) : '') + '" style="width:120px;"></div>' +
+    '<div style="margin-top:6px;"><b>Works full-time abroad</b> (35+ hours a week on average, over the tax year)?<br>' + sel('ftAbroad', [['', 'no'], ['yes', 'yes']], val('ftAbroad') ? 'yes' : '') + '</div>' +
+    '<div style="margin-top:8px;"><b>Ties now:</b>' + r.ties.map(t => '<div>' + (t.has ? '&#10003; ' : '&#10007; ') + escHtml(t.name) + ' &mdash; ' + escHtml(t.how) + '</div>').join('') + '</div>' +
+    '<div style="margin-top:6px;"><b>Result:</b> ' + escHtml(r.reason) + '. He would become UK resident at <b>' + r.limit + '</b> midnights.</div>' +
+    '</div></details>';
+}
+async function saveUkTies() { await storageSetRaw('uk-ties', JSON.stringify(ukTies)); }
+
 function computeStats(asof) {
   const stats = [];
   const pm = presenceMap();
@@ -1550,25 +1647,27 @@ function computeStats(asof) {
     const used = inRange(days, ty.start, ty.end).length;
     const notCounted = inRange(touched, ty.start, ty.end).length - used;
     const lines = [];
-    const hit = nthDay(days, ty.start, ty.end, ukThresh);
-    if (hit) lines.push('<span class="lim-hit">Reached ' + ukThresh + ' days on ' + niceDate(hit) + '</span>');
+    const uka = ukAssess(ty.label, pm), lim = uka.limit;
+    const hit = nthDay(days, ty.start, ty.end, lim);
+    if (hit) lines.push('<span class="lim-hit">Reached ' + lim + ' days on ' + niceDate(hit) + '</span>');
     if (used >= 183) lines.push('<span class="lim-hit">183+ days: automatically UK resident this tax year.</span>');
+    else if (used >= 16) lines.push('<span class="' + (uka.resident ? 'lim-hit' : 'lim-ok') + '">' + escHtml(uka.reason.charAt(0).toUpperCase() + uka.reason.slice(1)) + '.</span>');
     if (notCounted > 0) lines.push(notCounted + ' departure day(s) not counted (he wasn’t in the UK at midnight).');
     const tyYears = [];
     years.forEach(y => { const r = ukTaxYearRange(Date.UTC(y, 3, 6)); if (r.start <= asof) tyYears.push(r); });
     const history = tyYears.map(r => {
       const n = inRange(days, r.start, Math.min(r.end, asof)).length;
       const h183 = nthDay(days, r.start, r.end, 183);
+      const ra = ukAssess(r.label, pm);
       const verdict = n >= 183 ? '<b>183+ → automatically resident</b> (reached ' + niceDate(h183) + ')'
-        : n < ukThresh ? 'under ' + ukThresh + ' → automatically non-resident'
-        : 'between ' + ukThresh + ' and 182 → his UK ties decide';
-      return { label: r.label + (r.end > asof ? ' (so far)' : ''), days: n, reached: n >= ukThresh, text: verdict };
+        : escHtml(ra.reason) + ' (resident at ' + ra.limit + ')';
+      return { label: r.label + (r.end > asof ? ' (so far)' : ''), days: n, reached: n >= ra.limit, text: verdict };
     });
-    stats.push({ key: 'uk', title: 'United Kingdom', ruleLabel: 'Tax year ' + ty.label + ' · counts midnights · must stay under ' + ukThresh,
-      used, threshold: ukThresh, direction: 'atMost', leftCount: Math.max(ukThresh - 1 - used, 0), leftText: 'more days allowed',
-      statusClass: used >= ukThresh ? 'over' : used >= ukThresh * 0.75 ? 'warn' : 'ok',
-      note: 'Arrival day counts; the day he leaves doesn’t. 183+ days = automatically resident; between ' + ukThresh + ' and 182, his UK ties (home, family, work, 90 days in an earlier year) decide.',
-      lines, history, historyHead: 'Tax year · midnights in the UK · result', reachedWord: 'at or over ' + ukThresh,
+    stats.push({ key: 'uk', title: 'United Kingdom', ruleLabel: 'Tax year ' + ty.label + ' · counts midnights · must stay under ' + lim + ' (' + uka.nTies + ' tie' + (uka.nTies === 1 ? '' : 's') + ')',
+      used, threshold: lim, direction: 'atMost', leftCount: Math.max(lim - 1 - used, 0), leftText: 'more days allowed',
+      statusClass: used >= lim ? 'over' : used >= lim * 0.75 ? 'warn' : 'ok',
+      note: 'Arrival day counts; the day he leaves doesn’t. The limit comes from his UK ties below' + (uka.assumed ? ' (' + uka.assumed + ' not answered yet, counted as ties to be safe)' : '') + '.',
+      lines, history, historyHead: 'Tax year · midnights in the UK · result', reachedWord: 'resident',
       resetInfo: 'New tax year starts ' + niceDate(ty.end + DAY_MS) + '.' });
   }
 
@@ -1851,7 +1950,7 @@ function planImpact(stops) {
     // UK: each tax year the trip touches
     const uk = countedDays(pm, c => c === 'United Kingdom', 'midnight');
     r.uk = [];
-    for (let d = start; d <= end; d += DAY_MS) { const t = ukTaxYearRange(d); if (!r.uk.some(x => x.label === t.label)) r.uk.push({ label: t.label, used: inRange(uk, t.start, t.end).length, hit: nthDay(uk, t.start, t.end, ukThresh), hit183: nthDay(uk, t.start, t.end, 183) }); }
+    for (let d = start; d <= end; d += DAY_MS) { const t = ukTaxYearRange(d); if (!r.uk.some(x => x.label === t.label)) { const ua = ukAssess(t.label, pm); r.uk.push({ label: t.label, used: ua.days, lim: ua.limit, hit: ua.hit, hit183: ua.hit183 }); } }
     // calendar-year rules
     const it = countedDays(pm, c => c === 'Italy', 'anyPart'), cy = countedDays(pm, c => c === 'Cyprus', 'cyprus'), us = countedDays(pm, c => mapCountryToRegion(c) === 'US', 'anyPart');
     r.italy = years.map(y => { const L = isLeapYear(y) ? 184 : 183; return { y, used: inRange(it, yS(y), yE(y)).length, lim: L, hit: nthDay(it, yS(y), yE(y), L) }; });
@@ -1883,8 +1982,8 @@ function renderPlanResult(res) {
   a.uk.forEach((t, i) => {
     const bt = b.uk[i];
     const note = t.used >= 183 ? '183+ days: automatically UK resident this tax year.'
-      : inTrip(t.hit) && !(bt && bt.hit) ? 'Reaches ' + ukThresh + ' on ' + niceDate(t.hit) + ': leave by ' + niceDate(t.hit - DAY_MS) + ' to stay under.' : '';
-    row('UK, tax year ' + t.label + ' (midnights)', bt ? bt.used : 0, t.used, ukThresh, t.used >= 183 ? 'over' : t.used >= ukThresh ? 'over' : t.used >= ukThresh * 0.75 ? 'warn' : 'ok', note);
+      : inTrip(t.hit) && !(bt && bt.hit) ? 'Reaches ' + t.lim + ' on ' + niceDate(t.hit) + ': leave by ' + niceDate(t.hit - DAY_MS) + ' to stay under.' : '';
+    row('UK, tax year ' + t.label + ' (midnights)', bt ? bt.used : 0, t.used, t.lim, t.used >= 183 ? 'over' : t.used >= t.lim ? 'over' : t.used >= t.lim * 0.75 ? 'warn' : 'ok', note);
   });
   a.us.forEach((u, i) => row('US ' + u.y + ' (weighted; ' + u.cur + ' days this year)', b.us[i].w, u.w, 183, u.met ? 'over' : u.w >= 150 ? 'warn' : 'ok',
     u.met && !b.us[i].met ? 'Substantial presence test would be met on ' + niceDate(u.metOn) + '.' : ''));
@@ -1952,14 +2051,23 @@ function renderBoard() {
   renderYearJumpButtons();
 
   const ukStub = board.querySelector('[data-key="uk"]');
-  const ukSel = document.createElement('select');
-  ukSel.className = 'mini';
-  ukSel.innerHTML = '<option value="16">resident recently -&gt; 16-day test</option>' +
-    '<option value="46">not resident recently -&gt; 46-day test</option>' +
-    '<option value="91">full-time work abroad -&gt; 91-day test</option>';
-  ukSel.value = String(ukThresh);
-  ukSel.onchange = async () => { await saveUkThresh(ukSel.value); renderBoard(); };
-  ukStub.appendChild(ukSel);
+  const ukLabel = ukTaxYearRange(asof).label;
+  ukStub.insertAdjacentHTML('beforeend', ukTiesPanel(ukLabel));
+  const tiesBox = ukStub.querySelector('.uk-ties');
+  tiesBox.addEventListener('toggle', () => { ukTiesOpen = tiesBox.open; });
+  tiesBox.querySelectorAll('[data-ukt]').forEach(inp => inp.addEventListener('change', async () => {
+    await pushUndo();
+    const base = ukTies[ukLabel] || Object.assign({}, ukTiesFor(ukLabel)); delete base.from;
+    const k = inp.dataset.ukt;
+    let v = inp.value;
+    if (k === 'workDays') v = v === '' ? null : Math.max(0, Math.round(Number(v)));
+    if (k === 'ftAbroad') v = v === 'yes';
+    if (v === '' ) v = null;
+    base[k] = v;
+    ukTies = Object.assign({}, ukTies, { [ukLabel]: base });
+    await saveUkTies();
+    renderAll();
+  }));
 
   const uaeStub = board.querySelector('[data-key="uae"]');
   const uaeSel = document.createElement('select');
@@ -3536,17 +3644,17 @@ async function buildAdviserReport(year, note) {
   const rows = [];
   const res = (txt, cls) => '<span style="color:' + (cls === 'over' ? 'var(--red)' : cls === 'warn' ? 'var(--amber)' : 'var(--green)') + '; font-weight:bold;">' + txt + '</span>';
 
-  // United Kingdom: every tax year that touches this calendar year
+  // United Kingdom: every tax year that touches this calendar year, with his ties
   {
-    const uk = countedDays(pm, c => c === 'United Kingdom', 'midnight');
     [ukTaxYearRange(yS), ukTaxYearRange(yE)].filter((t, i, a) => a.findIndex(x => x.label === t.label) === i).forEach(t => {
       if (t.start > today) return;
-      const n = inRange(uk, t.start, Math.min(t.end, today)).length, hit = nthDay(uk, t.start, t.end, ukThresh), hit183 = nthDay(uk, t.start, t.end, 183);
-      const result = n >= 183 ? res('183+ — automatically UK resident (reached ' + nd(hit183) + ')', 'over')
-        : n >= ukThresh ? res(ukThresh + '+ — not automatically non-resident; UK ties decide (reached ' + nd(hit) + ')', 'warn')
-        : res('under ' + ukThresh + ' — automatically non-resident (day count)', 'ok');
-      rows.push(['United Kingdom', 'Tax year ' + t.label + ' (' + nd(t.start) + ' – ' + nd(t.end) + ')' + (t.end > today ? ', counted to ' + nd(today) : ''),
-        'Midnights in the UK; test set to ' + ukThresh + ' days', n, result]);
+      const u = ukAssess(t.label, pm);
+      const result = u.days >= 183 ? res('183+ \u2014 automatically UK resident (reached ' + nd(u.hit183) + ')', 'over')
+        : res(u.reason.charAt(0).toUpperCase() + u.reason.slice(1), u.resident ? 'over' : u.days >= u.limit * 0.75 ? 'warn' : 'ok');
+      const tieTxt = u.ties.map(x => (x.has ? '\u2713 ' : '\u2717 ') + x.name + ' (' + x.how + ')').join('<br>');
+      rows.push(['United Kingdom', 'Tax year ' + t.label + ' (' + nd(t.start) + ' \u2013 ' + nd(t.end) + ')' + (t.end > today ? ', counted to ' + nd(today) : ''),
+        'Midnights in the UK; ' + (u.prior ? 'leaver' : 'arriver') + ' (' + u.priorWhy + '); becomes resident at ' + u.limit + (u.ftAbroad ? '; full-time work abroad' : ''), u.days,
+        result + '<br><span class="hint">' + tieTxt + '</span>']);
     });
   }
   // Schengen: highest count in any 180-day window ending in this year
@@ -4302,7 +4410,7 @@ async function cleanupLegacyUndoFields() {
 // A tab left open keeps running the old version after an update is uploaded, so new bills can
 // miss newer features (e.g. a type that didn't exist yet). Every few minutes, and whenever the
 // tab comes back into view, compare this page's version with the one that's live.
-const APP_VERSION = '2026-10-19l';
+const APP_VERSION = '2026-10-19m';
 async function checkForNewerVersion() {
   try {
     const res = await fetch(location.href.split('#')[0], { cache: 'no-store' });
