@@ -156,8 +156,7 @@
   .att-item .att-icon { flex: 0 0 auto; width: 20px; text-align: center; }
   .att-item .att-text { flex: 1 1 auto; }
   .att-item button { flex: 0 0 auto; font-family: var(--ui); font-size: 12px; padding: 5px 10px; border: 1px solid var(--line-strong); background: var(--paper); border-radius: 2px; cursor: pointer; color: var(--ink); }
-  .att-item.over .att-text { color: var(--red); } .att-item.warn .att-text { color: var(--amber); }
-  @media (max-width: 480px) { .att-item { flex-wrap: wrap; } .att-item .att-text { flex: 1 1 0; min-width: 200px; } .att-item button { margin-left: 30px; } }
+  .att-item.over .att-text { color: var(--red); }
 
 
   /* ================= night-sky theme ================= */
@@ -182,6 +181,7 @@
   .tabbar button { background: transparent; border: none; border-radius: 999px; color: var(--mist); font-family: var(--ui); font-size: 15px; font-weight: 500; padding: 9px 6px; }
   .tabbar button:hover { background: var(--hover); color: var(--ivory); }
   .tabbar button.on { background: var(--accent); color: var(--on-accent); }
+  .tabbar .tab-badge { position: absolute; top: 0; right: 4px; margin: 0; min-width: 16px; font-size: 10px; line-height: 15px; padding: 0 4px; }
   @media (max-width: 480px) { .tabbar { gap: 2px; margin: 0 -16px 16px; padding: 8px 10px; } .tabbar button { font-size: 13.5px; padding: 9px 2px; } }
   .tabbar button:focus-visible, button:focus-visible, select:focus-visible, input:focus-visible, a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent-hi); outline-offset: 2px; }
 
@@ -249,7 +249,12 @@
   .cal-day .dcountry { font-size: 11px; }
   .cal-legend { font-family: var(--ui); font-size: 13px; color: var(--mist); }
   .att-item { font-family: var(--ui); font-size: 15px; border-top-color: var(--line); }
-  .att-item button { font-family: var(--ui); border-radius: 999px; color: var(--ivory); background: transparent; }
+  .att-item .att-body { flex: 1 1 auto; min-width: 0; }
+  .att-acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
+  .att-item button { font-family: var(--ui); font-size: 13.5px; border-radius: 999px; color: var(--ink); background: transparent; border: 1px solid var(--line-strong); padding: 5px 12px; cursor: pointer; }
+  .att-item button.att-primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+  .att-more { padding-top: 10px; }
+  .att-more button { font-family: var(--ui); font-size: 13.5px; border-radius: 999px; border: 1px solid var(--line-strong); background: transparent; color: var(--ink); padding: 6px 14px; cursor: pointer; }
   .att-item button:hover { background: var(--hover); }
   .footer-note { font-family: var(--ui); font-size: 13px; }
   .print-header h2 { font-family: var(--display); }
@@ -2092,37 +2097,124 @@ function initTabs() {
 }
 let lastHeldCount = 0; // import items waiting for a yes / no (set by renderImportReview)
 function lastBackupFileDate() { try { return localStorage.getItem('tl-last-backup-file') || ''; } catch (e) { return ''; } }
-function renderAttention() {
-  const el = document.getElementById('attentionList');
-  if (!el) return;
-  const items = []; // { lvl: over|warn|info, text, btn, go }
-  if (lastHeldCount) items.push({ lvl: 'warn', text: lastHeldCount + ' item(s) from your last import are waiting for your yes / no.', btn: 'Review', go: '#pdfImportStep' });
+// Open one day: the calendar on that month with the day's details on top (from any tab).
+function showDay(dateStr) {
+  const d = new Date(parseDate(dateStr));
+  calYear = d.getUTCFullYear(); calMonth = d.getUTCMonth();
+  setTab('calendar', false);
+  renderCalendar();
+  document.getElementById('calGrid').scrollIntoView({ block: 'center' });
+  showDayDetailPanel(dateStr);
+}
+// Every problem, in one list on Home, each with "Show me" and a fix where there is one.
+let attShowAll = false;
+function attentionItems() {
+  const items = []; // { lvl, text, day?, acts: [{ label, primary?, run }] , go? }
+  const nd = ms => niceDay(typeof ms === 'string' ? parseDate(ms) : ms);
+  const done = async () => { renderAll(); populateCloseYearSelect(); };
+  const ok = key => async () => { reviewedChecks.push(key); await saveReviewedChecks(); renderAll(); };
+  if (lastHeldCount) items.push({ lvl: 'warn', text: lastHeldCount + ' item(s) from your last upload need a yes or no before they go in.', acts: [{ label: 'Review', primary: true, run: () => goToSection('#pdfImportStep') }] });
   let is = null; try { is = findHealthIssues(); } catch (e) {}
+  const strays = [];
+  findTripsWithUncoveredBills().forEach(m => m.strayBills.forEach(ex => { if (!reviewedChecks.includes('stray:' + ex.id + ':' + ex.date)) strays.push({ ex, t: m.trip }); }));
+  const strayDays = new Set(strays.map(x => x.ex.date));
   if (is) {
-    const n = is.conflicts.length + is.dupLegs.length + is.badLegs.length;
-    if (n) items.push({ lvl: 'warn', text: n + ' calendar check(s): two countries on one day, a flight logged twice, or a city in the wrong country.', btn: 'Review', go: '#uncoveredDaysCheck' });
-    if (is.billDays.length) items.push({ lvl: 'warn', text: is.billDays.length + ' day(s) have a bill but no trip.', btn: 'Review', go: '#uncoveredDaysCheck' });
-    if (is.blankDays > 0) items.push({ lvl: 'info', text: is.blankDays + ' day(s) since ' + niceDate(is.blankFrom) + ' aren\u2019t in any country yet, so they count nowhere.', btn: 'Calendar', go: '#uncoveredDaysCheck' });
+    is.conflicts.forEach(c => {
+      const names = [...new Set([...c.trips].map(t => t.country))].join(' and ');
+      const acts = [{ label: 'Show me', run: () => showDay(fmt(c.from)) }];
+      c.fixTrips.forEach(t => acts.push({ label: 'Keep ' + c.flightCountry + ' only', primary: true, run: async () => { await trimTypedTrip(t.id, c.from, c.to, c.flightCountry); await done(); } }));
+      acts.push({ label: 'Both are right', run: ok('conflict:' + c.key + ':' + fmt(c.from) + ':' + fmt(c.to)) });
+      items.push({ lvl: 'warn', text: (c.from === c.to ? nd(c.from) : nd(c.from) + ' – ' + nd(c.to)) + ': in ' + names + ' on the same day, but no flight between them is logged.', acts });
+    });
+    is.dupLegs.forEach(g => {
+      const l = g[0];
+      items.push({ lvl: 'warn', text: nd(l.depDate) + ': the flight ' + ((l.depCity || l.from).trim()) + ' → ' + ((l.arrCity || l.to).trim()) + ' is logged ' + g.length + ' times.', acts: [
+        { label: 'Show me', run: () => showDay(l.depDate) },
+        { label: 'Remove the extra cop' + (g.length > 2 ? 'ies' : 'y'), primary: true, run: async () => { const ids = g.slice(1).map(x => x.id); await pushUndo(); legs = legs.filter(x => !ids.includes(x.id)); await saveLegs(); await buildTripsFromLegs(); await done(); } }] });
+    });
+    is.badLegs.forEach(b => {
+      const l = b.leg;
+      items.push({ lvl: 'warn', text: nd(l.depDate) + ': the flight ' + (l.depCity || '').trim() + ' → ' + (l.arrCity || '').trim() + ' says ' + (b.side === 'from' ? 'it left from ' : 'it landed in ') + l[b.side] + ', but ' + b.city + ' is in ' + b.should + '.', acts: [
+        { label: 'Show me', run: () => showDay(l.depDate) },
+        { label: 'Change to ' + b.should, primary: true, run: async () => { await pushUndo(); l[b.side] = b.should; await saveLegs(); await buildTripsFromLegs(); await done(); } },
+        { label: 'It’s correct', run: ok('leg:' + l.id + ':' + b.side) }] });
+    });
+    const billDays = is.billDays.filter(d => !strayDays.has(d));
+    if (billDays.length) {
+      // group consecutive days into stretches
+      const runs = []; billDays.forEach(s => { const d = parseDate(s), r = runs[runs.length - 1]; if (r && d - r[1] === DAY_MS) r[1] = d; else runs.push([d, d]); });
+      runs.forEach(r => items.push({ lvl: 'warn', text: (r[0] === r[1] ? nd(r[0]) : nd(r[0]) + ' – ' + nd(r[1])) + ': there is a bill, but no country is recorded for ' + (r[0] === r[1] ? 'that day' : 'those days') + '.', acts: [
+        { label: 'Show me', primary: true, run: () => showDay(fmt(r[0])) }] }));
+    }
+  }
+  // bills dated outside the stay they belong to
+  const canStretch = (ex, t) => {
+    const { start, end } = billRange(ex), te = parseDate(t.entry), tx = parseDate(t.exit);
+    const other = d => trips.some(o => o.country !== t.country && overlapDays(o.entry, o.exit, d, d) > 0);
+    for (let d = tx + DAY_MS; d <= end; d += DAY_MS) if (other(d)) return false;
+    for (let d = te - DAY_MS; d >= start; d -= DAY_MS) if (other(d)) return false;
+    return (Math.max(0, te - start) + Math.max(0, end - tx)) / DAY_MS <= MAX_AUTO_EXTEND_DAYS;
+  };
+  strays.forEach(({ ex, t }) => {
+    const key = 'stray:' + ex.id + ':' + ex.date;
+    const d = parseDate(ex.date);
+    const cover = trips.find(o => o.id !== t.id && overlapDays(o.entry, o.exit, d, d) > 0);
+    const acts = [{ label: 'Show me', run: () => showDay(ex.date) }];
+    if (cover) acts.push({ label: 'Move it to the ' + cover.country + ' stay', primary: true, run: async () => { await pushUndo(); ex.tripId = cover.id; await saveExpenses(); await done(); } });
+    else if (canStretch(ex, t)) acts.push({ label: 'Stretch the stay to cover it', primary: true, run: async () => {
+      await pushUndo();
+      if (extendTripToCoverBill(ex)) { await saveTrips(); await saveExpenses(); await done(); }
+    } });
+    items.push({ lvl: 'warn', text: 'The ' + (ex.category || 'bill').toLowerCase() + ' bill' + (ex.vendor ? ' from ' + ex.vendor : '') + ' is dated ' + nd(d) + ', outside its stay (' + t.country + ', ' + nd(t.entry) + ' \u2013 ' + nd(t.exit) + ')' +
+      (acts.length === 1 ? '. Another country is on the days between, so check the date on the bill.' : '.'), acts: acts.concat([{ label: 'It\u2019s fine', run: ok(key) }]) });
+  });
+  // the same stay entered twice
+  findDuplicateTrips().forEach(group => {
+    const t = group[0], key = 'duptrip:' + group.map(x => x.id).join(',');
+    if (reviewedChecks.includes(key)) return;
+    items.push({ lvl: 'warn', text: t.country + (t.state ? ' (' + t.state + ')' : '') + ', ' + nd(t.entry) + ' – ' + nd(t.exit) + ' is entered ' + group.length + ' times.', acts: [
+      { label: 'Show me', run: () => showDay(t.entry) },
+      { label: 'Remove the extra cop' + (group.length > 2 ? 'ies' : 'y'), primary: true, run: async () => {
+        await pushUndo();
+        const extra = group.slice(1).map(x => x.id);
+        trips = trips.filter(x => !extra.includes(x.id));
+        expenses.forEach(ex => { if (extra.includes(ex.tripId)) ex.tripId = t.id; }); // bills stay, on the copy that remains
+        await saveTrips(); await saveExpenses(); await done();
+      } },
+      { label: 'They’re different', run: ok(key) }] });
+  });
+  if (is && is.blankDays > 0) {
+    const longest = is.blankRuns.slice().sort((a, b) => (b[1] - b[0]) - (a[1] - a[0]))[0];
+    items.push({ lvl: 'info', text: is.blankDays + ' day(s) since ' + niceDate(is.blankFrom) + ' have no country, so they count nowhere' + (longest ? ' (the longest gap: ' + nd(longest[0]) + (longest[1] > longest[0] ? ' – ' + nd(longest[1]) : '') + ')' : '') + '.',
+      acts: longest ? [{ label: 'Show me', run: () => showDay(fmt(longest[0])) }] : [] });
   }
   const y = new Date().getUTCFullYear();
   const billOnly = trips.filter(t => t.evidenceOnly && overlapsYear(t, y)).length;
-  if (billOnly) items.push({ lvl: 'info', text: billOnly + ' trip(s) this year rest on a bill only; a boarding pass or booking would make them solid.', btn: 'See list', go: '#needsPassStep' });
+  if (billOnly) items.push({ lvl: 'info', text: billOnly + ' stay(s) this year rest on a bill only. A boarding pass or booking would make them solid.', acts: [{ label: 'See them', run: () => goToSection('#needsPassStep') }] });
   const age = Math.round((Date.now() - parseDate(RULES_CHECKED)) / DAY_MS);
-  if (age > 45) items.push({ lvl: 'warn', text: 'The country rules were last checked ' + age + ' days ago.', btn: 'Rules', go: '#rulesSection' });
+  if (age > 45) items.push({ lvl: 'warn', text: 'The country rules were last checked ' + age + ' days ago.', acts: [{ label: 'Rules', run: () => { document.getElementById('rulesSection').open = true; goToSection('#rulesSection'); } }] });
   const lb = lastBackupFileDate();
   const lbAge = lb ? Math.round((Date.now() - parseDate(lb)) / DAY_MS) : null;
-  if (lbAge == null || lbAge > 30) items.push({ lvl: 'info', text: (lb ? 'Last backup file saved from this device ' + lbAge + ' days ago.' : 'No backup file saved from this device yet.') + ' (Online backups run daily by themselves; this is the extra copy you keep.)', btn: 'Save one', act: 'backup' });
-  const icon = { over: '\u26D4', warn: '\u26A0\uFE0F', info: '\u2139\uFE0F' };
+  if (lbAge == null || lbAge > 30) items.push({ lvl: 'info', text: (lb ? 'Your last backup file from this device is ' + lbAge + ' days old.' : 'No backup file saved from this device yet.') + ' Online backups run daily by themselves; this is an extra copy to keep.', acts: [{ label: 'Save one', run: () => { exportBackup(); renderAttention(); } }] });
+  return items;
+}
+function renderAttention() {
+  const el = document.getElementById('attentionList');
+  if (!el) return;
+  const items = attentionItems();
+  const icon = { over: '⛔', warn: '⚠️', info: 'ℹ️' };
+  const LIMIT = 6, shown = attShowAll ? items : items.slice(0, LIMIT);
   el.innerHTML = items.length
-    ? items.map((it, i) => '<div class="att-item ' + it.lvl + '"><span class="att-icon">' + icon[it.lvl] + '</span><span class="att-text">' + escHtml(it.text) + '</span>' +
-        '<button type="button" data-att="' + i + '">' + escHtml(it.btn) + '</button></div>').join('')
-    : '<div class="att-item"><span class="att-icon" style="color:var(--green);">\u2713</span><span class="att-text" style="color:var(--green);">Nothing needs your attention.</span></div>';
-  el.querySelectorAll('[data-att]').forEach(b => b.onclick = () => {
-    const it = items[+b.dataset.att];
-    if (it.act === 'backup') { exportBackup(); renderAttention(); return; }
-    if (it.go === '#rulesSection') document.getElementById('rulesSection').open = true;
-    goToSection(it.go);
+    ? shown.map((it, i) => '<div class="att-item ' + it.lvl + '"><span class="att-icon">' + icon[it.lvl] + '</span><div class="att-body"><div class="att-text">' + escHtml(it.text) + '</div>' +
+        '<div class="att-acts">' + it.acts.map((a, j) => '<button type="button" class="' + (a.primary ? 'att-primary' : '') + '" data-att="' + i + ':' + j + '">' + escHtml(a.label) + '</button>').join('') + '</div></div></div>').join('') +
+      (items.length > LIMIT ? '<div class="att-more"><button type="button" id="attToggle">' + (attShowAll ? 'Show fewer' : 'Show all ' + items.length) + '</button></div>' : '')
+    : '<div class="att-item"><span class="att-icon" style="color:var(--green);">✓</span><div class="att-body"><div class="att-text" style="color:var(--green);">Nothing needs your attention.</div></div></div>';
+  el.querySelectorAll('[data-att]').forEach(b => b.onclick = async () => {
+    const [i, j] = b.dataset.att.split(':').map(Number);
+    b.disabled = true;
+    try { await shown[i].acts[j].run(); } finally { b.disabled = false; }
   });
+  const tg = document.getElementById('attToggle'); if (tg) tg.onclick = () => { attShowAll = !attShowAll; renderAttention(); };
   // a count on the Home tab for the things that need a decision
   const n = items.filter(i => i.lvl !== 'info').length;
   const homeBtn = document.querySelector('#tabbar [data-go="home"]');
@@ -2911,12 +3003,9 @@ function renderUncoveredDaysCheck() {
       (is.blankRuns.length ? ', the longest: ' + is.blankRuns.slice().sort((a, b) => (b[1] - b[0]) - (a[1] - a[0])).slice(0, 3).map(r => goto(r[0]) + (r[1] > r[0] ? ' – ' + nd(r[1]) : '')).join(', ') : '') +
       '. These count for no country.</div>'
     : '';
-  if (parts.length === 0) {
-    el.innerHTML = '<div class="hint" style="color:var(--green);">&#10003; Health check: no conflicts, duplicate flights or uncovered bills found (all years checked).</div>' + blankLine;
-  } else {
-    el.innerHTML = '<div class="print-note-box" style="border-color:var(--alert); background:var(--alert-bg); color:var(--alert-ink);">' +
-      '<strong>&#9888; Health check found ' + parts.length + ' thing(s) to look at:</strong>' + parts.join('') + blankLine + '</div>';
-  }
+  el.innerHTML = parts.length === 0
+    ? '<div class="hint" style="color:var(--green);">&#10003; Calendar check: no clashes, repeated flights or bills without a country.</div>' + blankLine
+    : attentionPointer(parts.length, 'thing(s) on the calendar need a look') + blankLine;
   el.querySelectorAll('[data-goto-month]').forEach(a => {
     a.onclick = e => {
       e.preventDefault();
@@ -4052,20 +4141,19 @@ function findTripsWithUncoveredBills() {
   });
   return results;
 }
+function attentionPointer(n, what) {
+  return '<div class="print-note-box" style="margin-bottom:12px;">\u26A0\uFE0F ' + n + ' ' + what + ' \u2014 listed with a fix under <b>Needs your attention</b> on Home. ' +
+    '<button type="button" class="btn-secondary" style="padding:4px 12px; font-size:13px; margin-left:4px;" onclick="setTab(\'home\', true); goToSection(\'#homeStep\')">Go there</button></div>';
+}
 function renderTripBillMismatchWarnings() {
   const el = document.getElementById('billMismatchWarnings');
   if (!el) return;
   const mismatches = findTripsWithUncoveredBills();
   if (mismatches.length === 0) { el.innerHTML = ''; return; }
-  const rows = mismatches.map(m => {
-    const dates = [...new Set(m.strayBills.map(ex => ex.date))].sort();
-    return '&bull; <strong>' + m.trip.country + (m.trip.state ? ', ' + m.trip.state : '') + '</strong> (' + m.trip.entry + ' to ' + m.trip.exit + ') has ' + m.strayBills.length + ' bill(s) dated outside that range: ' + dates.join(', ') + '. <button class="edit-btn" data-mismatch-id="' + m.trip.id + '">edit this trip</button>';
-  }).join('<br>');
-  el.innerHTML = '<div class="print-note-box" style="margin-bottom:12px; border-color:var(--alert); background:var(--alert-bg); color:var(--alert-ink);"><strong>&#9888; ' + mismatches.length + ' trip(s) have bills sitting outside their own date range \u2014 likely a shortened/corrupted trip:</strong><br>' + rows + '</div>';
-  el.querySelectorAll('[data-mismatch-id]').forEach(btn => {
-    btn.onclick = () => expandTripCardAndEdit(btn.dataset.mismatchId);
-  });
+  const n = mismatches.reduce((k, m) => k + m.strayBills.filter(ex => !reviewedChecks.includes('stray:' + ex.id + ':' + ex.date)).length, 0);
+  el.innerHTML = n ? attentionPointer(n, 'bill(s) are dated outside their stay') : '';
 }
+
 function findDuplicateTrips() {
   const groups = {};
   let pool = trips;
@@ -4084,26 +4172,10 @@ function renderDuplicateWarnings() {
   if (!el) return;
   const dups = findDuplicateTrips();
   if (dups.length === 0) { el.innerHTML = ''; return; }
-  const rows = dups.map(group => {
-    const t = group[0];
-    const extras = group.slice(1);
-    const removeBtns = extras.map(ex => '<button class="del-btn" data-dup-id="' + ex.id + '" style="margin-left:6px;">remove this duplicate</button>').join('');
-    return '&bull; <strong>' + t.country + (t.state ? ', ' + t.state : '') + '</strong> (' + t.entry + ' to ' + t.exit + ') appears ' + group.length + ' times.' + removeBtns;
-  }).join('<br>');
-  el.innerHTML = '<div class="print-note-box" style="margin-bottom:12px;"><strong>' + dups.length + ' possible duplicate trip(s) found:</strong><br>' + rows + '</div>';
-  el.querySelectorAll('[data-dup-id]').forEach(btn => {
-    btn.onclick = async () => {
-      await pushUndo();
-      const id = btn.dataset.dupId;
-      // Keep the bills: they move to the copy that stays, instead of being deleted with the duplicate.
-      const keep = dups.find(g => g.some(t => t.id === id))[0];
-      trips = trips.filter(t => t.id !== id);
-      expenses.forEach(ex => { if (ex.tripId === id) ex.tripId = keep.id; });
-      await saveTrips(); await saveExpenses();
-      renderAll();
-    };
-  });
+  const n = dups.filter(g => !reviewedChecks.includes('duptrip:' + g.map(x => x.id).join(','))).length;
+  el.innerHTML = n ? attentionPointer(n, 'stay(s) look entered twice') : '';
 }
+
 function renderNeedsPassList() {
   const el = document.getElementById('needsPassList');
   if (!el) return;
@@ -4631,7 +4703,7 @@ async function cleanupLegacyUndoFields() {
 // A tab left open keeps running the old version after an update is uploaded, so new bills can
 // miss newer features (e.g. a type that didn't exist yet). Every few minutes, and whenever the
 // tab comes back into view, compare this page's version with the one that's live.
-const APP_VERSION = '2026-10-20a';
+const APP_VERSION = '2026-10-20b';
 async function checkForNewerVersion() {
   try {
     const res = await fetch(location.href.split('#')[0], { cache: 'no-store' });
