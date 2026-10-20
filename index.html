@@ -205,6 +205,18 @@
   .year-jump-btn:hover { background: var(--hover); }
   .year-jump-btn.active { background: var(--ivory); color: var(--on-accent); border-color: var(--ivory); }
   #yearJumpButtons { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+  .setup-q { display: block; margin-top: 14px; font-weight: 600; font-size: 15px; }
+  .setup-q input[type=text] { display: block; width: 100%; margin-top: 6px; padding: 9px 12px; font-size: 15px; border: 1px solid var(--line-strong); border-radius: 8px; font-family: var(--ui); }
+  .setup-row { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 6px; font-weight: 400; }
+  .setup-chk { display: inline-flex; align-items: center; gap: 6px; font-size: 15px; cursor: pointer; }
+  #personSel { font-family: var(--ui); font-size: 14px; padding: 4px 8px; border-radius: 8px; border: 1px solid var(--line-strong); background: var(--paper); color: var(--ink); margin-left: 4px; }
+  .vo-badge { display: inline-block; margin-left: 8px; padding: 3px 10px; border-radius: 999px; background: var(--amber-bg); color: var(--amber); font-weight: 600; font-size: 13px; }
+  /* view-only: everything that changes data is hidden (and nothing is written anyway) */
+  body.read-only #pdfImportStep, body.read-only [data-tab~="add"]:not([data-tab~="more"]), body.read-only #tabbar [data-go="add"], body.read-only #homeAddDoc,
+  body.read-only .edit-btn, body.read-only .del-btn, body.read-only .undo-tools, body.read-only #importBtn, body.read-only #encryptionBox,
+  body.read-only #upgradeAllBtn, body.read-only #backfillHotelBtn, body.read-only .day-note-pencil, body.read-only .day-add-bill, body.read-only .edit-only,
+  body.read-only #dayDetailPanel button:not(#dayDetailClose), body.read-only #dayDetailPanel input, body.read-only #advancedDetails { display: none !important; }
+  body.read-only .uk-ties select, body.read-only .uk-ties input, body.read-only .prof-opts select, body.read-only [data-key] > select.mini { pointer-events: none; opacity: 0.65; }
   .undo-tools { margin-left: auto; display: inline-flex; gap: 6px; }
   .tool-btn { font-family: var(--ui); font-size: 13.5px; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--line-strong); background: transparent; color: var(--ink); cursor: pointer; }
   .tool-btn:hover:not(:disabled) { background: var(--hover); }
@@ -317,6 +329,9 @@
   </div>
 </div>
 <div id="appRoot" style="display:none;">
+<div id="setupOverlay" style="display:none; position:fixed; inset:0; z-index:250; background:rgba(24,40,58,0.45); align-items:center; justify-content:center; padding:16px;">
+  <div id="setupPanel" style="background:var(--paper-card); border:1px solid var(--line-strong); border-radius:16px; padding:24px; max-width:520px; width:100%; max-height:90vh; overflow-y:auto;"></div>
+</div>
 <div id="newVersionBanner" style="display:none; position:sticky; top:0; z-index:200; background:#16294A; color:#fff; padding:10px 14px; text-align:center; font-size:14px;">
   A newer version of the ledger is live. <button type="button" id="newVersionReload" style="margin-left:8px; font-family:inherit; cursor:pointer; padding:4px 10px;">Reload now</button>
   <span style="opacity:.8; margin-left:6px;">(your data is safe; it's all saved online)</span>
@@ -328,7 +343,11 @@
       <h1 class="brand">Travel Ledger</h1>
       <div class="brand-sub">Days in each country, counted by each country&rsquo;s own rules. A personal record, not tax advice.</div>
     </div>
-    <div class="account">Signed in as <strong id="currentUserEmail"></strong><button type="button" id="signOutBtn">Sign out</button></div>
+    <div class="account">
+      <span id="personWrap" style="display:none;">Ledger <select id="personSel" aria-label="Whose ledger"></select></span>
+      <span id="viewOnlyBadge" class="vo-badge" style="display:none;">View only</span>
+      <div style="margin-top:6px;">Signed in as <strong id="currentUserEmail"></strong><button type="button" id="signOutBtn">Sign out</button></div>
+    </div>
   </header>
 
   <nav class="tabbar" id="tabbar" aria-label="Sections">
@@ -372,6 +391,18 @@
     </div>
     <h2 style="margin:18px 0 4px;">Needs your attention</h2>
     <div id="attentionList"></div>
+  </div>
+
+  <div class="step" data-tab="more" id="peopleStep">
+    <h2>People and access</h2>
+    <div id="peoplePanel"></div>
+  </div>
+
+  <div class="step" data-tab="more plan">
+    <h2>Reminders in your calendar</h2>
+    <p class="hint">Puts the dates when a limit would be reached (from the trips already logged) and a monthly check-in into the phone&rsquo;s own calendar, which then does the reminding. Nothing is sent anywhere. Download it again after booking new trips.</p>
+    <button type="button" class="btn-primary" id="remindBtn">Add reminders to my calendar</button>
+    <div id="remindStatus" class="hint" style="margin-top:8px;"></div>
   </div>
 
   <div class="step" data-tab="more">
@@ -1129,11 +1160,57 @@ async function turnOnEncryption(passphrase, remember) {
 }
 
 // ================= storage (Firestore) =================
-const SHARED_DOC_PATH = ['ledgerData', 'shared'];
+// ---- several people in one app ----
+// The first person keeps the original documents (ledgerData/shared, ledgerData/undoRedo, backups
+// named by date); everyone added later gets their own: ledgerData/person-<id>, ledgerData/undo-<id>,
+// backups <id>_<date>, change log changeLog-<id>-YYYY-MM. The list of people is ledgerData/people.
+let currentPerson = 'main';
+let people = [{ id: 'main', name: '' }];
+let SHARED_DOC_PATH = ['ledgerData', 'shared'];
+function personPaths(id) {
+  currentPerson = id;
+  SHARED_DOC_PATH = id === 'main' ? ['ledgerData', 'shared'] : ['ledgerData', 'person-' + id];
+  UNDO_DOC_PATH = id === 'main' ? ['ledgerData', 'undoRedo'] : ['ledgerData', 'undo-' + id];
+}
+function backupDocId(dateStr) { return currentPerson === 'main' ? dateStr : currentPerson + '_' + dateStr; }
+function changeLogDocId(month) { return currentPerson === 'main' ? 'changeLog-' + month : 'changeLog-' + currentPerson + '-' + month; }
+async function loadPeople() {
+  try {
+    const { db, doc, getDoc } = window.__fb;
+    const snap = await getDoc(doc(db, 'ledgerData', 'people'));
+    if (snap.exists() && snap.data().list) {
+      const list = JSON.parse(await decryptStr(snap.data().list));
+      if (Array.isArray(list) && list.length) people = list;
+    }
+  } catch (e) { /* only the first person */ }
+  if (!people.some(p => p.id === 'main')) people.unshift({ id: 'main', name: '' });
+}
+async function savePeople() {
+  const { db, doc, setDoc } = window.__fb;
+  const str = JSON.stringify(people);
+  await setDoc(doc(db, 'ledgerData', 'people'), { list: cryptoKey ? await encryptStr(str) : str });
+}
+function personName(id) { const p = people.find(x => x.id === (id || currentPerson)); return (p && p.name) || (profile && profile.name) || ''; }
+function chosenPerson() { try { return localStorage.getItem('tl-person') || 'main'; } catch (e) { return 'main'; } }
+function switchPerson(id) {
+  if (logTimer) flushChangeLog();
+  try { localStorage.setItem('tl-person', id); } catch (e) {}
+  const go = () => { if (pendingSaves > 0) return setTimeout(go, 300); location.reload(); };
+  go();
+}
+async function addPerson() {
+  const name = (prompt('Name of the person to add (only you two will see it):') || '').trim();
+  if (!name) return;
+  const id = 'p' + Date.now().toString(36);
+  people.push({ id, name });
+  await savePeople();
+  try { localStorage.setItem('tl-setup-' + id, '1'); } catch (e) {}
+  switchPerson(id);
+}
 let firestoreCache = null;
 let suppressNextSnapshotReload = false;
 
-const UNDO_DOC_PATH = ['ledgerData', 'undoRedo'];
+let UNDO_DOC_PATH = ['ledgerData', 'undoRedo'];
 let undoRedoCache = null;
 
 async function getFirestoreDoc() {
@@ -1177,6 +1254,7 @@ function updateSaveIndicator() {
 }
 window.addEventListener('beforeunload', e => { if (pendingSaves > 0) { e.preventDefault(); e.returnValue = ''; } });
 async function storageSetRaw(key, value) {
+  if (readOnly) return false; // view-only: nothing is ever written
   const { db, doc, setDoc } = window.__fb;
   const isUndo = isUndoRedoKey(key);
   // Undo/redo history lives in its OWN document, so it can never block or slow saving the real data.
@@ -1299,11 +1377,12 @@ function scheduleDailyBackup() {
   backupDebounceTimer = setTimeout(() => { writeBackupNow('auto'); }, 4000);
 }
 async function writeBackupNow(reason) {
+  if (readOnly) return;
   try {
     const { db, doc, setDoc } = window.__fb;
     const dateStr = new Date().toISOString().slice(0, 10);
     const payload = { trips, legs, expenses, ukThresh, uaeThresh, dayNotes, ukTies, profile, savedAt: new Date().toISOString(), reason: reason || 'auto' };
-    await setDoc(doc(db, 'ledgerBackups', dateStr), cryptoKey
+    await setDoc(doc(db, 'ledgerBackups', backupDocId(dateStr)), cryptoKey
       ? { enc: await encryptStr(JSON.stringify(payload)), savedAt: payload.savedAt, reason: payload.reason }
       : payload);
   } catch (e) {
@@ -1493,11 +1572,12 @@ function describeChanges(a, b) {
   return out;
 }
 async function writeLogEntry(e) {
+  if (readOnly) return;
   const id = 'e' + e.at.replace(/\D/g, '') + Math.random().toString(36).slice(2, 6);
   try {
     const { db, doc, setDoc } = window.__fb;
     const str = JSON.stringify(e);
-    await setDoc(doc(db, 'ledgerData', 'changeLog-' + e.at.slice(0, 7)), { [id]: cryptoKey ? await encryptStr(str) : str }, { merge: true });
+    await setDoc(doc(db, 'ledgerData', changeLogDocId(e.at.slice(0, 7))), { [id]: cryptoKey ? await encryptStr(str) : str }, { merge: true });
   } catch (err) { console.warn('Change log entry not saved:', err); }
 }
 // every entry for one calendar year, newest first
@@ -1508,7 +1588,7 @@ async function loadChangeLog(year) {
   const lists = await Promise.all(months.map(async key => {
     const list = [];
     try {
-      const snap = await getDoc(doc(db, 'ledgerData', 'changeLog-' + key));
+      const snap = await getDoc(doc(db, 'ledgerData', changeLogDocId(key)));
       if (snap.exists()) for (const v of Object.values(snap.data() || {})) { try { list.push(JSON.parse(await decryptStr(v))); } catch (e) {} }
     } catch (e) {}
     return list;
@@ -1767,7 +1847,7 @@ function applyProfile(stats) {
       s.lines = ['<span class="' + (s.key === 'uae' ? 'lim-ok' : 'lim-hit') + '">' + escHtml(always.charAt(0).toUpperCase() + always.slice(1)) + '.</span>'].concat(s.lines || []);
     }
   });
-  return stats;
+  return stats.filter(s => tracked(s.key));
 }
 // the questions on each card
 const PROFILE_Q = {
@@ -2213,7 +2293,8 @@ function attentionItems() {
 function renderAttention() {
   const el = document.getElementById('attentionList');
   if (!el) return;
-  const items = attentionItems();
+  let items = attentionItems();
+  if (readOnly) items = items.map(it => Object.assign({}, it, { acts: it.acts.filter(a => /^Show me|^See them|^Rules/.test(a.label)) })).filter(it => it.acts.length || it.lvl !== 'info');
   const icon = { over: '⛔', warn: '⚠️', info: 'ℹ️' };
   const LIMIT = 6, shown = attShowAll ? items : items.slice(0, LIMIT);
   el.innerHTML = items.length
@@ -2290,6 +2371,8 @@ function renderPlanResult(res) {
   a.italy.forEach((x, i) => row('Italy ' + x.y, b.italy[i].used, x.used, x.lim, x.hit ? 'over' : x.used >= 150 ? 'warn' : 'ok', x.hit && !b.italy[i].hit ? 'Reaches ' + x.lim + ' on ' + niceDate(x.hit) + '.' : ''));
   a.cyprus.forEach((x, i) => row('Cyprus ' + x.y + ' (departure day not counted)', b.cyprus[i].used, x.used, 183, x.hit ? 'over' : x.used >= 150 ? 'warn' : 'ok', x.hit && !b.cyprus[i].hit ? 'Over 183 on ' + niceDate(x.hit) + '.' : ''));
   row('UAE (12 months to the end of the trip; needs ' + uaeRoute() + ')', b.uae, a.uae, uaeRoute(), a.uae >= uaeRoute() ? 'ok' : a.uae >= uaeRoute() - 30 ? 'warn' : 'over', a.uae < uaeRoute() ? (uaeRoute() - a.uae) + ' short of the ' + uaeRoute() + '-day route.' : '');
+  const rowKey = t => /^Schengen/.test(t) ? 'schengen' : /^UK/.test(t) ? 'uk' : /^US /.test(t) ? 'us' : /^Italy/.test(t) ? 'italy' : /^Cyprus/.test(t) ? 'cyprus' : /^UAE/.test(t) ? 'uae' : '';
+  for (let i = rows.length - 1; i >= 0; i--) if (!tracked(rowKey(rows[i].title))) rows.splice(i, 1);
   rows.forEach(r => {
     // his circumstances: an EU passport lifts the Schengen limit; citizenship or registration makes the count moot
     if (/^Schengen/.test(r.title) && profile.euPassport) { r.status = 'ok'; r.note = 'No limit for him (EU, EEA or Swiss passport).'; }
@@ -2358,8 +2441,8 @@ function renderBoard() {
 
   const ukStub = board.querySelector('[data-key="uk"]');
   const ukLabel = ukTaxYearRange(asof).label;
-  ukStub.insertAdjacentHTML('beforeend', ukTiesPanel(ukLabel));
-  const tiesBox = ukStub.querySelector('.uk-ties');
+  if (ukStub) ukStub.insertAdjacentHTML('beforeend', ukTiesPanel(ukLabel));
+  const tiesBox = ukStub ? ukStub.querySelector('.uk-ties') : document.createElement('div');
   tiesBox.addEventListener('toggle', () => { ukTiesOpen = tiesBox.open; });
   tiesBox.querySelectorAll('[data-ukt]').forEach(inp => inp.addEventListener('change', async () => {
     await pushUndo();
@@ -2392,7 +2475,7 @@ function renderBoard() {
   uaeSel.innerHTML = '<option value="90">90-day route (permit+home+business)</option><option value="183">183-day route (treaty)</option>';
   uaeSel.value = String(uaeThresh);
   uaeSel.onchange = async () => { await saveUaeThresh(uaeSel.value); renderBoard(); };
-  if (!['gccNational', 'uaeVisa', 'uaeHome', 'uaeWork'].some(k => profile[k] != null)) uaeStub.appendChild(uaeSel);
+  if (uaeStub && !['gccNational', 'uaeVisa', 'uaeHome', 'uaeWork'].some(k => profile[k] != null)) uaeStub.appendChild(uaeSel);
 }
 
 // ================= calendar =================
@@ -3054,20 +3137,21 @@ function renderUncoveredDaysCheck() {
 // Dates on screen always read day, month, year (25 Jan 2026). The data keeps 2026-01-25 inside;
 // any such date that reaches the page, a tooltip or a pop-up message is rewritten as it appears.
 const ISO_DAY = /\b(\d{4})-(\d{2})-(\d{2})(?:T[\d:.]+Z?)?\b/g;
+function displayText(str) { return pronounText(ukDates(str)); }
 function ukDates(str) {
   return String(str).replace(ISO_DAY, (m, y, mo, d) => (+mo >= 1 && +mo <= 12 && +d >= 1 && +d <= 31) ? niceDay(Date.UTC(+y, +mo - 1, +d)) : m);
 }
 function fixDatesIn(root) {
   if (root.nodeType === 3 && root.parentNode && root.parentNode.nodeName === 'OPTION' && !root.parentNode.hasAttribute('value')) return;
-  if (root.nodeType === 3) { const v = root.nodeValue, u = ukDates(v); if (u !== v) root.nodeValue = u; return; }
+  if (root.nodeType === 3) { const v = root.nodeValue, u = displayText(v); if (u !== v) root.nodeValue = u; return; }
   if (root.nodeType !== 1 || /^(SCRIPT|STYLE|TEXTAREA|INPUT)$/.test(root.nodeName) || (root.nodeName === 'OPTION' && !root.hasAttribute('value'))) return;
   const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT, {
     // option labels change too, but only where the option has its own value (so what is chosen stays the same)
     acceptNode: n => n.nodeType === 1 && (/^(SCRIPT|STYLE|TEXTAREA)$/.test(n.nodeName) || (n.nodeName === 'OPTION' && !n.hasAttribute('value'))) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT });
   const texts = [];
   for (let n = root; n; n = w.nextNode()) {
-    if (n.nodeType === 3) { const u = ukDates(n.nodeValue); if (u !== n.nodeValue) texts.push([n, u]); }
-    else if (n.title) { const u = ukDates(n.title); if (u !== n.title) n.title = u; }
+    if (n.nodeType === 3) { const u = displayText(n.nodeValue); if (u !== n.nodeValue) texts.push([n, u]); }
+    else if (n.title) { const u = displayText(n.title); if (u !== n.title) n.title = u; }
   }
   texts.forEach(([n, u]) => { n.nodeValue = u; });
 }
@@ -3081,8 +3165,8 @@ function fixDatesIn(root) {
     })).observe(root, { childList: true, subtree: true, characterData: true });
   };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
-  ['alert', 'confirm'].forEach(k => { const orig = window[k].bind(window); window[k] = msg => orig(ukDates(msg)); });
-  const origPrompt = window.prompt.bind(window); window.prompt = (msg, def) => origPrompt(ukDates(msg), def);
+  ['alert', 'confirm'].forEach(k => { const orig = window[k].bind(window); window[k] = msg => orig(displayText(msg)); });
+  const origPrompt = window.prompt.bind(window); window.prompt = (msg, def) => origPrompt(displayText(msg), def);
 })();
 function niceDay(ms) { return new Date(ms).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }); }
 function renderCalendar() {
@@ -4052,6 +4136,8 @@ async function buildAdviserReport(year, note) {
       (max >= uaeRoute() ? res('route met (' + uaeRoute() + '+)', 'ok') : res('route not met (' + uaeRoute() + ' needed)', 'warn')) + '<br>' + inYear + ' UAE day(s) in ' + year]);
   }
 
+  const repKey = { 'United Kingdom': 'uk', 'Schengen area': 'schengen', 'Italy': 'italy', 'Cyprus': 'cyprus', 'United States': 'us', 'UAE': 'uae' };
+  for (let i = rows.length - 1; i >= 0; i--) if (!tracked(repKey[rows[i][0]])) rows.splice(i, 1);
   rows.forEach(r => {
     if (r[0] === 'Schengen area' && profile.euPassport) r[4] = res('not limited: EU, EEA or Swiss passport', 'ok') + '<br>' + r[4];
     const k = { 'United States': 'us', 'Italy': 'italy', 'UAE': 'uae' }[r[0]];
@@ -4091,7 +4177,7 @@ async function buildAdviserReport(year, note) {
 
   const by = (document.getElementById('currentUserEmail') || {}).textContent || '';
   const H = t => '<h3 style="font-size:13px; font-weight:normal; text-transform:uppercase; letter-spacing:1px; margin:22px 0 8px; font-family:var(--ui);">' + t + '</h3>';
-  let html = '<div class="print-header"><h2>Travel day-count report &mdash; ' + year + '</h2>' +
+  let html = '<div class="print-header"><h2>Travel day-count report &mdash; ' + year + (personName() ? ' &mdash; ' + e(personName()) : '') + '</h2>' +
     '<div class="meta">Prepared ' + nd(today) + (by ? ' by ' + e(by) : '') + ' &middot; ' + (yE > today ? 'year in progress, counted to ' + nd(today) : 'full year') +
     ' &middot; rules checked ' + nd(parseDate(RULES_CHECKED)) + '</div></div>';
   const sit = profileSummary();
@@ -4664,6 +4750,7 @@ document.getElementById('closePreviewBtn').addEventListener('click', () => {
 
 // ================= events: backup =================
 document.getElementById('exportBtn').addEventListener('click', exportBackup);
+document.getElementById('remindBtn').addEventListener('click', downloadCalendarReminders);
 // signing out also forgets a remembered passphrase key on this device
 document.getElementById('signOutBtn').addEventListener('click', () => { forgetKeys(); cryptoKey = null; });
 
@@ -4723,6 +4810,155 @@ document.getElementById('importFile').addEventListener('change', async (e) => {
   e.target.value = '';
 });
 
+// ================= view-only people (e.g. the tax adviser) =================
+// ledgerData/access = { viewers: [emails] }. A viewer can open everything and print the report but
+// change nothing: the page hides every editing control and never writes, and the Firestore rules
+// (owners write, viewers read) make the same promise on the server.
+let readOnly = false, accessInfo = { viewers: [] };
+async function loadAccess() {
+  try {
+    const { db, doc, getDoc } = window.__fb;
+    const snap = await getDoc(doc(db, 'ledgerData', 'access'));
+    if (snap.exists()) accessInfo = Object.assign({ viewers: [] }, snap.data());
+  } catch (e) {}
+  const me = ((document.getElementById('currentUserEmail') || {}).textContent || '').trim().toLowerCase();
+  readOnly = !!me && (accessInfo.viewers || []).map(v => String(v).toLowerCase()).includes(me);
+  document.body.classList.toggle('read-only', readOnly);
+}
+async function saveAccess() {
+  const { db, doc, setDoc } = window.__fb;
+  await setDoc(doc(db, 'ledgerData', 'access'), { viewers: accessInfo.viewers || [] });
+}
+
+// ================= how the page speaks about the person: he / she / you =================
+const VERB_YOU = { is: 'are', was: 'were', has: 'have', does: 'do', goes: 'go', "isn't": "aren't", "wasn't": "weren't", "doesn't": "don't", "hasn't": "haven't" };
+function pronounText(str) {
+  const p = (profile && profile.pronoun) || 'he';
+  if (p === 'he') return str;
+  if (p === 'she') return str.replace(/\b(he|He|his|His|him|Him|himself)\b/g, w => ({ he: 'she', He: 'She', his: 'her', His: 'Her', him: 'her', Him: 'Her', himself: 'herself' })[w]);
+  // "you": fix the verb that follows "he", then the rest
+  return str
+    .replace(/\b(he|He)('s)\b/g, (m, h) => (h === 'He' ? 'You' : 'you') + "'re")
+    .replace(/\b(he|He) (is|was|has|does|goes|isn't|wasn't|doesn't|hasn't)\b/g, (m, h, v) => (h === 'He' ? 'You' : 'you') + ' ' + VERB_YOU[v])
+    .replace(/\b(he|He) ([a-z]+?)(ies|es|s)\b/g, (m, h, stem, end) => {
+      const verb = end === 'ies' ? stem + 'y' : /(sh|ch|x|ss|o)$/.test(stem) && end === 'es' ? stem : stem + (end === 'es' ? 'e' : '');
+      return (h === 'He' ? 'You' : 'you') + ' ' + verb;
+    })
+    .replace(/\b(he|He|his|His|him|Him|himself)\b/g, w => ({ he: 'you', He: 'You', his: 'your', His: 'Your', him: 'you', Him: 'You', himself: 'yourself' })[w])
+    // a little word between "you" and its verb ("you no longer has", "you also is")
+    .replace(/\b(you|You) (no longer|also|still|only|never|always|already|then|now) (is|was|has|does|doesn't|isn't)\b/g, (m, y, adv, v) => y + ' ' + adv + ' ' + VERB_YOU[v])
+    .replace(/, or has your\b/g, ', or have your');
+}
+
+// ================= which countries this person tracks =================
+const ALL_JURIS = [['schengen', 'Schengen area'], ['uk', 'United Kingdom'], ['us', 'United States'], ['uae', 'UAE'], ['italy', 'Italy'], ['cyprus', 'Cyprus']];
+function tracked(key) { const t = profile && profile.tracked; return !Array.isArray(t) || !t.length || t.includes(key); }
+
+// ================= set up a person =================
+function openSetup() {
+  const p = profile || {};
+  const box = document.getElementById('setupPanel');
+  const chk = (k, on, label) => '<label class="setup-chk"><input type="checkbox" data-setup-track="' + k + '"' + (on ? ' checked' : '') + '> ' + label + '</label>';
+  const pass = (k, on, label) => '<label class="setup-chk"><input type="checkbox" data-setup-pass="' + k + '"' + (on ? ' checked' : '') + '> ' + label + '</label>';
+  box.innerHTML = '<h3 style="font-family:var(--display); font-weight:600; font-size:26px; margin:0 0 6px;">Set up this ledger</h3>' +
+    '<p class="hint" style="margin:0 0 14px;">Takes a minute. Everything can be changed later under More.</p>' +
+    '<label class="setup-q">Whose days are tracked here?<input type="text" id="setupName" value="' + escHtml(personName() || p.name || '') + '" placeholder="Name"></label>' +
+    '<div class="setup-q">How should the page talk about them?<div class="setup-row">' +
+      ['he', 'she', 'you'].map(v => '<label class="setup-chk"><input type="radio" name="setupPron" value="' + v + '"' + ((p.pronoun || 'he') === v ? ' checked' : '') + '> ' + (v === 'you' ? '&ldquo;you&rdquo; (my own ledger)' : '&ldquo;' + v + '&rdquo;') + '</label>').join('') + '</div></div>' +
+    '<div class="setup-q">Which countries should be tracked?<div class="setup-row">' + ALL_JURIS.map(([k, n]) => chk(k, tracked(k), n)).join('') + '</div></div>' +
+    '<div class="setup-q">Passports held<div class="setup-row">' +
+      pass('ukCitizen', p.ukCitizen === true, 'British') + pass('euPassport', p.euPassport === true, 'EU, EEA or Swiss') + pass('usPerson', !!US_STATUS[p.usPerson], 'US (or green card)') + pass('gccNational', p.gccNational === true, 'UAE or other GCC') +
+    '</div><span class="hint">More detail (UK ties, homes, visas) sits on each country&rsquo;s card.</span></div>' +
+    '<div style="display:flex; gap:8px; margin-top:16px;"><button type="button" class="btn-primary" id="setupSave">Save</button><button type="button" class="btn-secondary" id="setupCancel">Cancel</button></div>';
+  document.getElementById('setupOverlay').style.display = 'flex';
+  document.getElementById('setupCancel').onclick = closeSetup;
+  document.getElementById('setupSave').onclick = async () => {
+    await pushUndo();
+    const name = document.getElementById('setupName').value.trim();
+    const pron = (box.querySelector('input[name="setupPron"]:checked') || {}).value || 'he';
+    const tr = [...box.querySelectorAll('[data-setup-track]')].filter(i => i.checked).map(i => i.dataset.setupTrack);
+    const np = Object.assign({}, profile, { name, pronoun: pron, tracked: tr.length ? tr : ALL_JURIS.map(j => j[0]), setupDone: true });
+    box.querySelectorAll('[data-setup-pass]').forEach(i => {
+      const k = i.dataset.setupPass;
+      if (k === 'usPerson') { if (i.checked) np.usPerson = US_STATUS[np.usPerson] ? np.usPerson : 'citizen'; else delete np.usPerson; }
+      else if (i.checked) np[k] = true; else if (np[k] === true) delete np[k];
+    });
+    const pronChanged = (profile.pronoun || 'he') !== pron;
+    profile = np; await saveProfile();
+    const me = people.find(x => x.id === currentPerson); if (me && name) { me.name = name; await savePeople(); }
+    try { localStorage.removeItem('tl-setup-' + currentPerson); } catch (e) {}
+    closeSetup();
+    if (pronChanged) { const go = () => pendingSaves > 0 ? setTimeout(go, 300) : location.reload(); go(); return; } // the page's own wording is rewritten on load
+    renderAll(); renderPeoplePanel();
+  };
+}
+function closeSetup() { document.getElementById('setupOverlay').style.display = 'none'; }
+
+// the person switcher (masthead) and the "People and access" panel (More)
+function renderPeoplePanel() {
+  const sel = document.getElementById('personSel');
+  if (sel) {
+    sel.innerHTML = people.map(p => '<option value="' + escHtml(p.id) + '"' + (p.id === currentPerson ? ' selected' : '') + '>' + escHtml(p.name || (p.id === currentPerson && profile.name) || 'First ledger') + '</option>').join('') +
+      (readOnly ? '' : '<option value="__add">+ Add a person&hellip;</option>');
+    sel.onchange = () => { const v = sel.value; if (v === '__add') { sel.value = currentPerson; addPerson(); } else if (v !== currentPerson) switchPerson(v); };
+    document.getElementById('personWrap').style.display = people.length > 1 || !readOnly ? '' : 'none';
+  }
+  const el = document.getElementById('peoplePanel'); if (!el) return;
+  const tr = ALL_JURIS.filter(([k]) => tracked(k)).map(j => j[1]).join(', ');
+  el.innerHTML = '<div class="hint" style="line-height:1.7;"><b>' + escHtml(personName() || 'This ledger') + '</b> &middot; wording: &ldquo;' + escHtml((profile.pronoun || 'he')) + '&rdquo; &middot; tracking: ' + escHtml(tr) +
+    (profileSummary().length ? '<br>Situation: ' + escHtml(profileSummary().join(', ')) : '') + '</div>' +
+    '<div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;" class="edit-only"><button type="button" class="btn-primary" id="setupOpen">Edit setup</button><button type="button" class="btn-secondary" id="personAdd">Add a person</button></div>' +
+    '<h3 style="font-family:var(--display); font-weight:600; font-size:20px; margin:20px 0 6px;">View-only access</h3>' +
+    '<p class="hint" style="margin:0 0 8px;">For example the tax adviser: they can look at everything and print the report, but can&rsquo;t change anything. They also need a login and the passphrase.</p>' +
+    '<div id="viewerList">' + ((accessInfo.viewers || []).length ? accessInfo.viewers.map((v, i) => '<div class="hint" style="display:flex; gap:8px; align-items:center;">' + escHtml(v) + ' <button type="button" class="del-btn edit-only" data-viewer-del="' + i + '">remove</button></div>').join('') : '<div class="hint">Nobody yet.</div>') + '</div>' +
+    '<div class="edit-only" style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap;"><input type="email" id="viewerEmail" placeholder="adviser@example.com" style="min-width:220px; padding:7px 10px; border:1px solid var(--line-strong); border-radius:8px;"><button type="button" class="btn-secondary" id="viewerAdd">Add view-only person</button></div>';
+  const so = document.getElementById('setupOpen'); if (so) so.onclick = openSetup;
+  const pa = document.getElementById('personAdd'); if (pa) pa.onclick = addPerson;
+  const va = document.getElementById('viewerAdd'); if (va) va.onclick = async () => {
+    const v = document.getElementById('viewerEmail').value.trim().toLowerCase();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v)) return alert('Please type a full email address.');
+    accessInfo.viewers = [...new Set([...(accessInfo.viewers || []), v])]; await saveAccess(); renderPeoplePanel();
+  };
+  el.querySelectorAll('[data-viewer-del]').forEach(b => b.onclick = async () => { accessInfo.viewers.splice(+b.dataset.viewerDel, 1); await saveAccess(); renderPeoplePanel(); });
+}
+
+// ================= reminders in the phone's own calendar (.ics) =================
+// No server reads the data: the dates are worked out here and handed to the calendar app, which
+// does the reminding. Each entry says only which limit and when.
+function upcomingLimitDates() {
+  const out = [], today = parseDate(new Date().toISOString().slice(0, 10)), pm = presenceMap();
+  if (tracked('uk')) [0, 1].forEach(k => { const ty = ukTaxYearRange(today + k * 366 * DAY_MS), a = ukAssess(ty.label, pm); if (a.hit && a.hit > today) out.push({ d: a.hit, what: 'UK: reaches ' + a.limit + ' nights (tax year ' + ty.label + ')' }); });
+  if (tracked('schengen') && !profile.euPassport) {
+    const sch = new Set(countedDays(pm, c => mapCountryToRegion(c) === 'Schengen', 'anyPart'));
+    for (let d = today; d <= today + 365 * DAY_MS; d += DAY_MS) { let n = 0; for (let x = d - 179 * DAY_MS; x <= d; x += DAY_MS) if (sch.has(x)) n++; if (n > 90) { out.push({ d, what: 'Schengen: day 91 in 180' }); break; } }
+  }
+  const y = new Date(today).getUTCFullYear();
+  [y, y + 1].forEach(yy => {
+    if (tracked('italy') && !profileAlways('italy')) { const L = isLeapYear(yy) ? 184 : 183, h = nthDay(countedDays(pm, c => c === 'Italy', 'anyPart'), Date.UTC(yy, 0, 1), Date.UTC(yy, 11, 31), L); if (h && h > today) out.push({ d: h, what: 'Italy: reaches ' + L + ' days in ' + yy }); }
+    if (tracked('cyprus')) { const h = nthDay(countedDays(pm, c => c === 'Cyprus', 'cyprus'), Date.UTC(yy, 0, 1), Date.UTC(yy, 11, 31), 184); if (h && h > today) out.push({ d: h, what: 'Cyprus: over 183 days in ' + yy }); }
+  });
+  return out.sort((a, b) => a.d - b.d);
+}
+function downloadCalendarReminders() {
+  const ymd = ms => fmt(ms).replace(/-/g, ''), stamp = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15) + 'Z';
+  const who = personName() ? ' (' + personName() + ')' : '';
+  const ev = [];
+  upcomingLimitDates().forEach((x, i) => ev.push(['BEGIN:VEVENT', 'UID:tl-limit-' + currentPerson + '-' + i + '-' + ymd(x.d) + '@travel-ledger', 'DTSTAMP:' + stamp,
+    'DTSTART;VALUE=DATE:' + ymd(x.d - DAY_MS), 'DTEND;VALUE=DATE:' + ymd(x.d), 'SUMMARY:Travel Ledger' + who + ': leave by today. ' + x.what + ' tomorrow',
+    'BEGIN:VALARM', 'ACTION:DISPLAY', 'DESCRIPTION:Travel Ledger limit coming up', 'TRIGGER:-P7D', 'END:VALARM',
+    'BEGIN:VALARM', 'ACTION:DISPLAY', 'DESCRIPTION:Travel Ledger limit tomorrow', 'TRIGGER:-PT15H', 'END:VALARM', 'END:VEVENT'].join('\r\n')));
+  const first = new Date(); first.setUTCDate(1); first.setUTCMonth(first.getUTCMonth() + 1);
+  ev.push(['BEGIN:VEVENT', 'UID:tl-monthly-' + currentPerson + '@travel-ledger', 'DTSTAMP:' + stamp, 'DTSTART;VALUE=DATE:' + ymd(Date.UTC(first.getUTCFullYear(), first.getUTCMonth(), 1)),
+    'RRULE:FREQ=MONTHLY;BYMONTHDAY=1', 'SUMMARY:Travel Ledger' + who + ': monthly check (limits and new documents)',
+    'BEGIN:VALARM', 'ACTION:DISPLAY', 'DESCRIPTION:Open the Travel Ledger', 'TRIGGER:PT9H', 'END:VALARM', 'END:VEVENT'].join('\r\n'));
+  const ics = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Travel Ledger//EN', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH'].concat(ev, ['END:VCALENDAR']).join('\r\n');
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([ics], { type: 'text/calendar' })); a.download = 'travel-ledger-reminders.ics';
+  document.body.appendChild(a); a.click(); a.remove();
+  const n = ev.length - 1;
+  const msg = document.getElementById('remindStatus');
+  if (msg) msg.textContent = n ? n + ' limit date(s) and a monthly check were put in the file. Open it to add them to the calendar.' : 'No limit is coming up with the trips logged so far, so the file has the monthly check only. Download it again after booking trips.';
+}
+
 // ================= init =================
 let __ledgerInitialized = false;
 async function cleanupLegacyUndoFields() {
@@ -4748,7 +4984,7 @@ async function cleanupLegacyUndoFields() {
 // A tab left open keeps running the old version after an update is uploaded, so new bills can
 // miss newer features (e.g. a type that didn't exist yet). Every few minutes, and whenever the
 // tab comes back into view, compare this page's version with the one that's live.
-const APP_VERSION = '2026-10-20d';
+const APP_VERSION = '2026-10-20e';
 async function checkForNewerVersion() {
   try {
     const res = await fetch(location.href.split('#')[0], { cache: 'no-store' });
@@ -6064,9 +6300,17 @@ async function initLedger() {
   document.getElementById('asof').value = today;
   populateCountrySelects();
   await ensureUnlocked();
+  await loadAccess();
+  await loadPeople();
+  { const want = chosenPerson(); personPaths(people.some(p => p.id === want) ? want : 'main'); }
   await cleanupLegacyUndoFields();
   await loadAll();
   logSetBase();
+  fixDatesIn(document.getElementById('appRoot')); // the page's own wording, now that we know he / she / you
+  renderPeoplePanel();
+  if (readOnly) document.getElementById('viewOnlyBadge').style.display = '';
+  { let ask = false; try { ask = localStorage.getItem('tl-setup-' + currentPerson) === '1'; } catch (e) {}
+    if (!readOnly && (ask || (!profile.setupDone && trips.length === 0 && legs.length === 0 && expenses.length === 0))) setTimeout(openSetup, 300); }
   renderEncryptionStatus();
   initPlanner();
   initTabs();
