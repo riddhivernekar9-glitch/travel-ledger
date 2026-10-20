@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en-GB">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -3039,6 +3039,39 @@ function renderUncoveredDaysCheck() {
     await saveLegs(); await buildTripsFromLegs();
   });
 }
+// Dates on screen always read day, month, year (25 Jan 2026). The data keeps 2026-01-25 inside;
+// any such date that reaches the page, a tooltip or a pop-up message is rewritten as it appears.
+const ISO_DAY = /\b(\d{4})-(\d{2})-(\d{2})\b/g;
+function ukDates(str) {
+  return String(str).replace(ISO_DAY, (m, y, mo, d) => (+mo >= 1 && +mo <= 12 && +d >= 1 && +d <= 31) ? niceDay(Date.UTC(+y, +mo - 1, +d)) : m);
+}
+function fixDatesIn(root) {
+  if (root.nodeType === 3 && root.parentNode && root.parentNode.nodeName === 'OPTION' && !root.parentNode.hasAttribute('value')) return;
+  if (root.nodeType === 3) { if (/\d{4}-\d{2}-\d{2}/.test(root.nodeValue)) root.nodeValue = ukDates(root.nodeValue); return; }
+  if (root.nodeType !== 1 || /^(SCRIPT|STYLE|TEXTAREA|INPUT)$/.test(root.nodeName) || (root.nodeName === 'OPTION' && !root.hasAttribute('value'))) return;
+  const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT, {
+    // option labels change too, but only where the option has its own value (so what is chosen stays the same)
+    acceptNode: n => n.nodeType === 1 && (/^(SCRIPT|STYLE|TEXTAREA)$/.test(n.nodeName) || (n.nodeName === 'OPTION' && !n.hasAttribute('value'))) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT });
+  const texts = [];
+  for (let n = root; n; n = w.nextNode()) {
+    if (n.nodeType === 3) { if (/\d{4}-\d{2}-\d{2}/.test(n.nodeValue)) texts.push(n); }
+    else if (n.title && /\d{4}-\d{2}-\d{2}/.test(n.title)) n.title = ukDates(n.title);
+  }
+  texts.forEach(n => { n.nodeValue = ukDates(n.nodeValue); });
+}
+(function () {
+  const start = () => {
+    const root = document.getElementById('appRoot'); if (!root) return;
+    fixDatesIn(root);
+    new MutationObserver(muts => muts.forEach(m => {
+      if (m.type === 'characterData') fixDatesIn(m.target);
+      else m.addedNodes.forEach(fixDatesIn);
+    })).observe(root, { childList: true, subtree: true, characterData: true });
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
+  ['alert', 'confirm'].forEach(k => { const orig = window[k].bind(window); window[k] = msg => orig(ukDates(msg)); });
+  const origPrompt = window.prompt.bind(window); window.prompt = (msg, def) => origPrompt(ukDates(msg), def);
+})();
 function niceDay(ms) { return new Date(ms).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }); }
 function renderCalendar() {
   renderUncoveredDaysCheck();
@@ -4703,7 +4736,7 @@ async function cleanupLegacyUndoFields() {
 // A tab left open keeps running the old version after an update is uploaded, so new bills can
 // miss newer features (e.g. a type that didn't exist yet). Every few minutes, and whenever the
 // tab comes back into view, compare this page's version with the one that's live.
-const APP_VERSION = '2026-10-20b';
+const APP_VERSION = '2026-10-20c';
 async function checkForNewerVersion() {
   try {
     const res = await fetch(location.href.split('#')[0], { cache: 'no-store' });
