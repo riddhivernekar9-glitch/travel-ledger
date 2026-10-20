@@ -6,6 +6,15 @@
 <!-- private tool: keep it out of search engines and don't pass its address to other sites -->
 <meta name="robots" content="noindex, nofollow, noarchive, nosnippet, noimageindex">
 <meta name="referrer" content="no-referrer">
+<!-- add to home screen: opens full-screen with its own icon, like an app -->
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" type="image/png" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Travel Ledger">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="theme-color" content="#EAF2F9">
 <title>Travel Ledger</title>
 <style>
   /* fonts are built in (Bodoni Moda, Instrument Sans; SIL Open Font License) so the page asks no other site for them */
@@ -352,7 +361,7 @@
 
   <div id="freshFileBanner" class="step">
     <strong style="color: var(--red); font-family:var(--ui); font-size:12px;">This file has no data in it.</strong>
-    <p class="hint">If you already have a backup, click <strong>Load my data</strong> below right now, before adding anything.</p>
+    <p class="hint">If you have a backup file, tap <strong>Load my data</strong> before adding anything.</p>
   </div>
 
   <div class="step" data-tab="home" id="homeStep">
@@ -366,7 +375,7 @@
   </div>
 
   <div class="step" data-tab="more">
-    <h2>Save / load your data</h2>
+    <h2>Backups</h2>
     <div class="backup-row">
       <button type="button" id="exportBtn" class="btn-primary">Save my data (download a file)</button>
       <button type="button" id="importBtn" class="btn-secondary">Load my data (from a file)</button>
@@ -374,9 +383,7 @@
     </div>
     <div id="backupStatus" class="hint" style="margin-top:8px;"></div>
     <div id="encryptionBox" class="print-note-box" style="margin-top:12px;"></div>
-    <p class="hint">Click <strong>Save my data</strong> before you close this page. Whenever you open a new copy
-      of this tool, click <strong>Load my data</strong> first &mdash; that's the only step that carries your trips
-      and bills forward.</p>
+    <p class="hint">A full backup is made online every day by itself. <strong>Save my data</strong> downloads an extra copy for you to keep; with encryption on, only the passphrase can open it.</p>
   </div>
 
   <div class="step" data-tab="home">
@@ -399,7 +406,7 @@
 
   <div class="step" id="plannerStep" data-tab="plan">
     <h2>Can I go? &mdash; plan a trip</h2>
-    <p class="hint" style="margin:0 0 6px;">Try a trip before booking it: see what it does to every limit. Add several stops for a multi-country trip. Nothing is saved.</p>
+    <p class="hint" style="margin:0 0 6px;">Try a trip before you book it. Nothing is saved.</p>
     <div id="plannerRows"></div>
     <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">
       <button type="button" class="btn-secondary" id="planAddStop">+ add another stop</button>
@@ -423,14 +430,13 @@
   </div>
 
   <div class="step" id="pdfImportStep" data-tab="add">
-    <h2>Add bookings &amp; bills from files or photos</h2>
-    <p class="hint" style="margin-bottom:10px;">Airline e-tickets and itineraries (Emirates, British Airways, KLM, Lufthansa&hellip;) hotel confirmations (Hilton, Marriott&hellip;), boarding passes, and bills or receipts (restaurant, taxi, shop, laundry&hellip;) &mdash; as PDF, photo (JPEG, PNG&hellip;), saved web page (HTML) or saved email (.eml). On a phone you can take the photo straight from the camera.
-      <b>The files are read on this device only &mdash; they are never uploaded or stored.</b> New flights, hotel stays and bills go straight into the calendar; anything already logged (e.g. from a boarding pass) is skipped; anything that would change a day already on the calendar waits for your yes / no. Everything added is listed below with a Remove button, and Undo reverses a whole import.</p>
+    <h2>Add documents and photos</h2>
+    <p class="hint" style="margin-bottom:10px;">E-tickets, boarding passes, hotel bookings and bills: PDF, photo, web page or email. <b>Read on this device only, never uploaded.</b> New items go straight in; anything that clashes with what&rsquo;s already there waits for your yes or no. Undo reverses a whole upload.</p>
     <label class="btn-primary" style="display:inline-block; cursor:pointer; padding:8px 14px;">Choose files or photos&hellip;
       <input type="file" id="pdfImportInput" accept="application/pdf,.pdf,image/*,.heic,.heif,.html,.htm,.mht,.eml,.txt,text/html,text/plain,message/rfc822" multiple style="display:none;"></label>
     <details id="pasteTextBox" style="margin-top:10px;">
       <summary class="hint" style="cursor:pointer; color:var(--ink);">Or paste text &mdash; best for photos of bills</summary>
-      <p class="hint" style="margin:6px 0;">Most devices can copy the text out of a photo themselves, and read it better than this page can. Copy it, paste it here, and it&rsquo;s read like a file. Works for any text: a bill, a hotel folio, an email.</p>
+      <p class="hint" style="margin:6px 0;">Your phone can copy the text out of a photo better than this page can read it. Copy it and paste it here:</p>
       <ul class="hint" style="margin:0 0 6px 18px; padding:0;">
         <li><b>iPhone / iPad:</b> open the photo, press and hold on the text, <b>Select All</b> &rarr; <b>Copy</b> (Live Text, done on the device).</li>
         <li><b>Mac:</b> open the photo in Photos or Preview, select the text with the cursor, <b>Copy</b> (Live Text, done on the Mac).</li>
@@ -446,8 +452,8 @@
   </div>
 
   <div class="step" data-tab="add">
-    <h2>Log a day</h2>
-    <p class="hint" style="margin-bottom:14px;">This is the one place for everything — a hotel booking, a restaurant bill, a taxi receipt, anything. Pick the country and date, add whatever you have, and it builds the trip evidence for you automatically. No need to think about “boarding pass vs trip vs bill” — just log what actually happened that day.</p>
+    <h2>Add a bill</h2>
+    <p class="hint" style="margin-bottom:14px;">Pick the stay, the type and the date, and add what you have. A bill on its own is enough to show he was there.</p>
     <form class="entry" id="expenseForm">
       <input type="hidden" id="expEditId" value="">
       <div>
@@ -471,7 +477,7 @@
           <label>New trip &mdash; exit date</label>
           <input type="date" id="expNewTripExit">
         </div>
-        <p class="hint" style="flex-basis:100%; margin:2px 0 0;">A hotel booking (or any bill) is enough on its own to justify a trip &mdash; this creates it automatically and attaches this bill to it in one step.</p>
+        <p class="hint" style="flex-basis:100%; margin:2px 0 0;">This creates the stay and attaches the bill to it.</p>
       </div>
       <div>
         <label>Type</label>
@@ -698,37 +704,31 @@
   </div>
 
   <div class="step" data-tab="calendar" id="needsPassStep">
-    <h2>Still needs a boarding pass</h2>
-    <p class="hint">Every trip currently flagged as receipt-only, in one place &mdash; work through this list to
-      find and log the missing flights, rather than hunting through the full trip table below.</p>
+    <h2>Stays shown by a bill only</h2>
+    <p class="hint">These stays rest on a bill only. Adding the flight or a booking makes them solid.</p>
     <div id="needsPassList" style="margin-top:10px;"></div>
   </div>
 
   <div class="step" data-tab="more">
-    <h2>Your trips</h2>
-    <button type="button" id="upgradeAllBtn" class="btn-primary" style="margin-bottom:8px;">Make bill-backed trips proper (one click, does everything)</button>
-    <p class="hint" style="margin-bottom:10px;">Carves precise trips out of hotel bookings, then upgrades any trip that already has at least
-      one bill attached (hotel, restaurant, taxi, anything) from receipt-only to fully confirmed &mdash; matching the idea that
-      a hotel booking plus bills is real evidence of being in a country, not just a boarding pass.</p>
-    <button type="button" id="backfillHotelBtn" class="btn-secondary" style="margin-bottom:8px;">Just tighten dates using hotel bookings (no upgrading)</button>
-    <p class="hint" style="margin-bottom:10px;">For any hotel bill sitting inside a wide receipt-only trip, this carves out a precise trip
-      matching the hotel's own check-in/check-out dates &mdash; one click, does the whole list at once. Only ever touches
-      receipt-only trips; never a confirmed flight-backed one.</p>
+    <h2>All stays</h2>
+    <button type="button" id="upgradeAllBtn" class="btn-primary" style="margin-bottom:8px;">Tidy stays using hotel bookings</button>
+    <p class="hint" style="margin-bottom:10px;">Sets exact stays from hotel check-in and check-out dates, and marks any stay with a bill as confirmed.</p>
+    <button type="button" id="backfillHotelBtn" class="btn-secondary" style="margin-bottom:8px;">Only set dates from hotel bookings</button>
+    <p class="hint" style="margin-bottom:10px;">Changes only stays that rest on a bill, never ones backed by a flight.</p>
     <div id="backfillStatus" class="hint" style="margin-bottom:12px;"></div>
     <input type="text" id="tripSearch" placeholder="Filter by country, state, or notes&hellip;" style="width:100%; font-family:var(--ui); font-size:13px; padding:8px; border:1px solid var(--line-strong); border-radius:2px; background:var(--paper); color:var(--ink); margin-bottom:12px;">
     <div id="billMismatchWarnings"></div>
     <div id="dupWarnings"></div>
-    <p class="hint" style="margin-bottom:8px;">Click any trip to see its bills and evidence in one place, without scrolling through the full bill list below.</p>
+    <p class="hint" style="margin-bottom:8px;">Tap a stay to see its bills.</p>
     <div id="tripBody"></div>
   </div>
 
   <details id="advancedDetails" data-tab="add" style="margin-bottom:20px; border:1px solid var(--line); border-radius:4px; padding:2px 16px;">
-    <summary style="cursor:pointer; padding:14px 0; font-weight:bold; color:var(--ink-soft);">Advanced: log an actual boarding pass, or fix a trip's dates directly</summary>
-    <p class="hint" style="margin-bottom:16px;">Most of the time, “Log a day” above is all you need. Use this only when you have a real boarding pass to log precisely, or need to manually correct a trip's exact dates.</p>
+    <summary style="cursor:pointer; padding:14px 0; font-weight:bold; color:var(--ink-soft);">Enter a flight or a stay by hand</summary>
+    <p class="hint" style="margin-bottom:16px;">Usually not needed: uploading a document does this for you.</p>
   <div class="step">
-    <h2>Log a boarding pass</h2>
-    <p class="hint" style="margin-bottom:10px;">Departure date/city, then arrival date/city. No times, no
-      durations &mdash; if the exact landing date isn't printed on the pass, just use the departure date again.</p>
+    <h2>Enter a flight</h2>
+    <p class="hint" style="margin-bottom:10px;">Dates and places only, no times. Leave the landing date blank if it&rsquo;s the same day.</p>
     <form class="entry" id="legForm">
       <input type="hidden" id="legEditId" value="">
       <div>
@@ -748,7 +748,7 @@
         <select id="legTo"></select>
       </div>
       <div>
-        <label>Arrival date (optional &mdash; defaults to departure date)</label>
+        <label>Landing date (if different)</label>
         <input type="date" id="legArrDate">
       </div>
       <div>
@@ -773,15 +773,12 @@
       <button type="button" id="buildTripsBtn" class="btn-secondary">Refresh calendar now</button>
       <span id="buildStatus" class="hint"></span>
     </div>
-    <p class="hint"><strong>The calendar updates automatically</strong> every time you add, edit, or remove a
-      flight above &mdash; you don't need to click anything else. This button is just a manual refresh, there in
-      case you ever want to force it. Chains your flights together by date: arriving somewhere starts the stay,
-      your next flight out ends it. Never touches anything you type into "Add a trip" below.</p>
+    <p class="hint">The calendar updates by itself whenever a flight is added, changed or removed.</p>
     <div id="legWarnings"></div>
   </div>
 
   <div class="step">
-    <h2>Add a trip directly (or fix one built from a flight)</h2>
+    <h2>Enter or correct a stay</h2>
     <form class="entry" id="entryForm">
       <input type="hidden" id="tripEditId" value="">
       <div>
@@ -1526,12 +1523,17 @@ async function saveDayNotes() { storageOk = await storageSetRaw('day-notes', JSO
 async function saveUkThresh(v) { ukThresh = Number(v); await storageSetRaw('uk-threshold', String(ukThresh)); }
 async function saveUaeThresh(v) { uaeThresh = Number(v); await storageSetRaw('uae-threshold', String(uaeThresh)); }
 
-function exportBackup() {
+async function exportBackup() {
   const payload = { exportedAt: new Date().toISOString(), trips, legs, expenses, ukThresh, uaeThresh, dayNotes, ukTies, profile }; // dayNotes = per-day city labels; were missing from backups
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  // With encryption on, the file is locked with the same passphrase: a lost laptop or a shared
+  // drive shows nothing readable. Loading it back needs the ledger unlocked with that passphrase.
+  const body = cryptoKey
+    ? JSON.stringify({ travelLedgerBackup: 2, encrypted: true, exportedAt: payload.exportedAt, salt: cryptoInfo && cryptoInfo.salt, iter: cryptoInfo && cryptoInfo.iter, enc: await encryptStr(JSON.stringify(payload)) })
+    : JSON.stringify(payload, null, 2);
+  const blob = new Blob([body], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  a.href = url; a.download = 'travel-ledger-backup-' + new Date().toISOString().slice(0, 10) + '.json';
+  a.href = url; a.download = 'travel-ledger-backup-' + new Date().toISOString().slice(0, 10) + (cryptoKey ? '-encrypted' : '') + '.json';
   document.body.appendChild(a); a.click(); a.remove();
   URL.revokeObjectURL(url);
   try { localStorage.setItem('tl-last-backup-file', new Date().toISOString().slice(0, 10)); } catch (e) {}
@@ -1542,6 +1544,16 @@ async function importBackupFile(file) {
   try { data = JSON.parse(text); } catch (e) {
     document.getElementById('backupStatus').textContent = 'Could not read that file \u2014 is it a backup .json from this ledger?';
     return;
+  }
+  if (data && data.encrypted && data.enc) {
+    // an encrypted backup opens with the ledger's passphrase (the key already unlocked here)
+    try {
+      if (!cryptoKey) throw new Error('locked');
+      data = JSON.parse(await decryptStr(data.enc));
+    } catch (e) {
+      document.getElementById('backupStatus').textContent = 'This backup is encrypted with a different passphrase (or the ledger is locked), so it can\u2019t be opened here.';
+      return;
+    }
   }
   const newTrips = Array.isArray(data.trips) ? data.trips : [];
   const newLegs = Array.isArray(data.legs) ? data.legs : [];
@@ -3041,23 +3053,23 @@ function renderUncoveredDaysCheck() {
 }
 // Dates on screen always read day, month, year (25 Jan 2026). The data keeps 2026-01-25 inside;
 // any such date that reaches the page, a tooltip or a pop-up message is rewritten as it appears.
-const ISO_DAY = /\b(\d{4})-(\d{2})-(\d{2})\b/g;
+const ISO_DAY = /\b(\d{4})-(\d{2})-(\d{2})(?:T[\d:.]+Z?)?\b/g;
 function ukDates(str) {
   return String(str).replace(ISO_DAY, (m, y, mo, d) => (+mo >= 1 && +mo <= 12 && +d >= 1 && +d <= 31) ? niceDay(Date.UTC(+y, +mo - 1, +d)) : m);
 }
 function fixDatesIn(root) {
   if (root.nodeType === 3 && root.parentNode && root.parentNode.nodeName === 'OPTION' && !root.parentNode.hasAttribute('value')) return;
-  if (root.nodeType === 3) { if (/\d{4}-\d{2}-\d{2}/.test(root.nodeValue)) root.nodeValue = ukDates(root.nodeValue); return; }
+  if (root.nodeType === 3) { const v = root.nodeValue, u = ukDates(v); if (u !== v) root.nodeValue = u; return; }
   if (root.nodeType !== 1 || /^(SCRIPT|STYLE|TEXTAREA|INPUT)$/.test(root.nodeName) || (root.nodeName === 'OPTION' && !root.hasAttribute('value'))) return;
   const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT, {
     // option labels change too, but only where the option has its own value (so what is chosen stays the same)
     acceptNode: n => n.nodeType === 1 && (/^(SCRIPT|STYLE|TEXTAREA)$/.test(n.nodeName) || (n.nodeName === 'OPTION' && !n.hasAttribute('value'))) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT });
   const texts = [];
   for (let n = root; n; n = w.nextNode()) {
-    if (n.nodeType === 3) { if (/\d{4}-\d{2}-\d{2}/.test(n.nodeValue)) texts.push(n); }
-    else if (n.title && /\d{4}-\d{2}-\d{2}/.test(n.title)) n.title = ukDates(n.title);
+    if (n.nodeType === 3) { const u = ukDates(n.nodeValue); if (u !== n.nodeValue) texts.push([n, u]); }
+    else if (n.title) { const u = ukDates(n.title); if (u !== n.title) n.title = u; }
   }
-  texts.forEach(n => { n.nodeValue = ukDates(n.nodeValue); });
+  texts.forEach(([n, u]) => { n.nodeValue = u; });
 }
 (function () {
   const start = () => {
@@ -3246,12 +3258,12 @@ function renderCalendar() {
   }
   document.getElementById('calLegend').innerHTML = Object.entries(REGION_COLORS).map(([region, c]) =>
     '<span><span class="sw" style="background:' + c.bg + '; border-color:' + c.border + '"></span>' + region + '</span>').join('') +
-    '<span>&#9992; = flight route that day</span>' +
-    '<span>(text) = a bill/receipt logged that day</span>' +
-    '<span><span class="sw" style="border-style:dashed;"></span>dashed = assumed between two flights, no bill or entry yet</span>' +
-    '<span>&#128196; = added from a file (hover to see which)</span>' +
-    '<span>&#9888; bold magenta = a bill exists but no trip covers this day yet, or a receipt-only transit day between two countries</span>' +
-    '<span>click any highlighted day to jump to it in the lists below</span>';
+    '<span>&#9992; flight</span>' +
+    '<span>(Hotel) a bill that day</span>' +
+    '<span><span class="sw" style="border-style:dashed;"></span>dashed: assumed, between two flights</span>' +
+    '<span>&#128196; from an uploaded document</span>' +
+    '<span>&#9888; pink: a bill but no country</span>' +
+    '<span>Tap a day to see or change it</span>';
 }
 
 // ================= trips =================
@@ -4686,7 +4698,7 @@ function renderEncryptionStatus() {
     if (!document.getElementById('encAck').checked) { msg.textContent = 'Please tick the box to confirm you\u2019ve understood.'; return; }
     const btn = document.getElementById('encGo'); btn.disabled = true;
     if (pendingSaves > 0) { msg.style.color = 'var(--ink-soft)'; msg.textContent = 'Finishing the last save\u2026'; while (pendingSaves > 0) await new Promise(r => setTimeout(r, 300)); }
-    exportBackup();
+    await exportBackup();
     msg.style.color = 'var(--ink-soft)'; msg.textContent = 'Backup file saved. Encrypting everything\u2026 (keep this page open)';
     try {
       const n = await turnOnEncryption(p1, document.getElementById('encRemember').checked);
@@ -4736,7 +4748,7 @@ async function cleanupLegacyUndoFields() {
 // A tab left open keeps running the old version after an update is uploaded, so new bills can
 // miss newer features (e.g. a type that didn't exist yet). Every few minutes, and whenever the
 // tab comes back into view, compare this page's version with the one that's live.
-const APP_VERSION = '2026-10-20c';
+const APP_VERSION = '2026-10-20d';
 async function checkForNewerVersion() {
   try {
     const res = await fetch(location.href.split('#')[0], { cache: 'no-store' });
