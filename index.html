@@ -4984,7 +4984,7 @@ async function cleanupLegacyUndoFields() {
 // A tab left open keeps running the old version after an update is uploaded, so new bills can
 // miss newer features (e.g. a type that didn't exist yet). Every few minutes, and whenever the
 // tab comes back into view, compare this page's version with the one that's live.
-const APP_VERSION = '2026-10-21c';
+const APP_VERSION = '2026-10-21d';
 async function checkForNewerVersion() {
   try {
     const res = await fetch(location.href.split('#')[0], { cache: 'no-store' });
@@ -5049,6 +5049,14 @@ const pad2 = n => String(n).padStart(2, '0');
 const yr = y => { y = +y; return y < 100 ? 2000 + y : y; };
 const okDate = (y, m, d) => y >= 2015 && y <= 2035 && m >= 1 && m <= 12 && d >= 1 && d <= 31 ? y + '-' + pad2(m) + '-' + pad2(d) : null;
 
+// American documents write numeric dates month first (10/05/26 = 5 October). While one is being
+// read this is switched on (see looksAmerican); everywhere else numbers are read day first.
+let US_DATES = false;
+const US_STATES = 'AL|AK|AZ|AR|CA|CO|CT|DE|DC|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY';
+function looksAmerican(text) {
+  if (new RegExp('\\b(' + US_STATES + ')\\s\\d{5}(?:-\\d{4})?\\b').test(text) || /\b(USA|U\.S\.A\.?|United States)\b/.test(text)) return true;
+  return /\$\s?\d/.test(text) && !/[£€]|\b(AED|EUR|GBP|CHF|SGD|AUD|CAD|HKD)\b|[ACS]\$|HK\$/.test(text);
+}
 // every date in a piece of text, in order: [{date:'2025-03-15', index}]
 function findDates(text) {
   const out = [];
@@ -5057,17 +5065,19 @@ function findDates(text) {
   const mon = '(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|gen|mag|giu|lug|ago|set|ott|dic|mär|mrz|mai|okt|dez|févr|avr|juil|août|déc)';
   let re = new RegExp('\\b(\\d{1,2})(?:st|nd|rd|th)?[\\s\\-\\.]?' + mon + '\\.?[,\\s\\-\\.]?\\s?(\\d{4}|\\d{2})\\b', 'gi');           // 15MAR25, 21 March 2025, 21-Mar-2025
   while ((m = re.exec(text))) push(okDate(yr(m[3]), MONTHS[m[2].toLowerCase()], +m[1]), m.index);
-  re = new RegExp('\\b' + mon + '\\.?\\s(\\d{1,2})(?:st|nd|rd|th)?,?\\s(\\d{4})\\b', 'gi');                                   // January 18, 2026
+  re = new RegExp('\\b' + mon + '\\.?\\s(\\d{1,2})(?:st|nd|rd|th)?(?:,\\s?|\\s)(\\d{4})\\b', 'gi');                                   // January 18, 2026
   while ((m = re.exec(text))) push(okDate(+m[3], MONTHS[m[1].toLowerCase()], +m[2]), m.index);
   re = /\b(20\d{2})-(\d{2})-(\d{2})\b/g;                                                                                          // 2025-03-15
   while ((m = re.exec(text))) push(okDate(+m[1], +m[2], +m[3]), m.index);
   re = /\b(\d{1,2})[./](\d{1,2})[./](20\d{2}|\d{2})\b/g;                                                                           // 02.02.2026, 21/03/2025 (day first; US order only if the day can't be a month)
-  while ((m = re.exec(text))) { let d = +m[1], mo = +m[2]; if (mo > 12 && d <= 12) [d, mo] = [mo, d]; push(okDate(yr(m[3]), mo, d), m.index); }
+  while ((m = re.exec(text))) { let d = +m[1], mo = +m[2]; if (US_DATES ? d <= 12 : (mo > 12 && d <= 12)) [d, mo] = [mo, d]; push(okDate(yr(m[3]), mo, d), m.index); }
+  re = /\b(\d{1,2})-(\d{1,2})-(20\d{2})\b/g;                                                                                      // 13-09-2026 (Italian tills)
+  while ((m = re.exec(text))) { let d = +m[1], mo = +m[2]; if (US_DATES ? d <= 12 : (mo > 12 && d <= 12)) [d, mo] = [mo, d]; push(okDate(+m[3], mo, d), m.index); }
   return out.sort((a, b) => a.index - b.index);
 }
 
 // three-letter airport codes in a line: "(DXB)" anywhere, or bare "DXB" on a line that has a flight number
-const FLIGHT_NO = /(?<!(?:[Aa]irbus|AIRBUS|[Aa]ircraft|AIRCRAFT|[Ee]quipment|EQUIPMENT|[Pp]lane|PLANE)[:\s-]*)\b(?!A3\d\d(?![\d]))(EK|EY|QR|BA|VS|KL|AF|LH|LX|OS|AZ|IB|TP|SN|SK|AY|EI|TK|A3|OA|CY|FZ|G9|WY|GF|SV|MS|RJ|ME|KQ|ET|SA|QF|SQ|CX|NH|JL|KE|OZ|MH|TG|GA|PR|5J|VN|AI|UK|UL|AA|UA|DL|B6|AS|WN|AC|AM|CM|LA|AV|U2|FR|W6|VY|EW|DE|LS|BY|TOM|HV|DY|D8)\s?0*\d{1,4}\b(?![\s.-]?(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec))/;
+const FLIGHT_NO = /(?<!(?:[Aa]irbus|AIRBUS|[Aa]ircraft|AIRCRAFT|[Ee]quipment|EQUIPMENT|[Pp]lane|PLANE)[:\s-]*)\b(?!A3\d\d(?![\d]))(EK|EY|QR|BA|VS|KL|AF|LH|LX|OS|AZ|IB|TP|SN|SK|AY|EI|TK|A3|OA|CY|FZ|G9|WY|GF|SV|MS|RJ|ME|KQ|ET|SA|QF|SQ|CX|NH|JL|KE|OZ|MH|TG|GA|PR|5J|VN|AI|UK|UL|AA|UA|DL|B6|AS|WN|AC|AM|CM|LA|AV|U2|FR|W6|VY|EW|DE|LS|BY|TOM|HV|DY|D8|EZY|EJU|EZS|RYR|WZZ|BAW|VIR|DLH|AFR|KLM|AAL|UAL|DAL)\s?0*\d{1,4}\b(?![\s.-]?(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec))/;
 // 3-letter codes that are also ordinary words or abbreviations, only trusted in brackets or next to a flight number
 const CODE_WORDS = new Set(['MAN', 'LOS', 'ADD', 'DEL', 'SAN', 'SEA', 'PER', 'INN', 'MAD', 'LAS', 'GOA', 'BOS', 'STR', 'FAO', 'DUB', 'HAM', 'BER', 'NAS', 'MEL', 'CAG', 'LIN', 'OLB', 'TPA', 'ORD', 'SIN', 'CAI', 'PER', 'LIS', 'AMS', 'DEN', 'ATH', 'BAH', 'MIA', 'KIX']);
 function airportsIn(line, loose) {
@@ -5076,11 +5086,13 @@ function airportsIn(line, loose) {
   while ((m = re.exec(line))) if (AIRPORTS[m[1]]) out.push({ code: m[1], index: m.index });
   if (loose && !FLIGHT_NO.test(line)) {
     const re3 = /(?:^|[\s,>\-–→])([A-Z]{3})(?=$|[\s,<\-–→])/g;
-    while ((m = re3.exec(line))) if (AIRPORTS[m[1]] && !CODE_WORDS.has(m[1]) && !out.some(o => Math.abs(o.index - m.index) < 4)) out.push({ code: m[1], index: m.index });
+    while ((m = re3.exec(line))) { const at = m.index + m[0].length - 3; if (AIRPORTS[m[1]] && !CODE_WORDS.has(m[1]) && !out.some(o => Math.abs(o.index - at) < 3)) out.push({ code: m[1], index: at }); }
   }
   if (FLIGHT_NO.test(line)) {
     const re2 = /\b([A-Z]{3})\b/g;
     while ((m = re2.exec(line))) if (AIRPORTS[m[1]] && !out.some(o => Math.abs(o.index - m.index) < 3)) out.push({ code: m[1], index: m.index });
+    const re4 = /\b[A-Z]{3}-([A-Z]{3})[A-Z]\b/g;   // "DXB-LHRJ" (class letter glued on)
+    while ((m = re4.exec(line))) if (AIRPORTS[m[1]] && !out.some(o => Math.abs(o.index - (m.index + 4)) < 3)) out.push({ code: m[1], index: m.index + 4 });
   }
   return out.sort((a, b) => a.index - b.index);
 }
@@ -5098,6 +5110,8 @@ function yearlessDates(text) {
   }
   return out;
 }
+const AIRPORT_NAMES = { Gatwick: 'LGW', Heathrow: 'LHR', Stansted: 'STN', Luton: 'LTN', 'London City': 'LCY', Ciampino: 'CIA', Fiumicino: 'FCO', Malpensa: 'MXP', Linate: 'LIN', Bergamo: 'BGY',
+  Orly: 'ORY', 'Charles de Gaulle': 'CDG', Newark: 'EWR', 'La Guardia': 'LGA', LaGuardia: 'LGA', 'Kennedy': 'JFK', 'Al Maktoum': 'DWC', 'Dubai World Central': 'DWC', 'Abu Dhabi': 'AUH' };
 function parseFlights(lines) {
   const flights = [];
   const seen = new Set();
@@ -5110,14 +5124,9 @@ function parseFlights(lines) {
   // Which side the details sit on is decided once per document, from the first flight: if nothing
   // useful sits just above it, details follow the flight number ("EK 0005 DXB -> LGW / Departure: 12 May")
   // and no segment may reach upwards into the previous flight's lines.
-  const looksBack = starts.length > 0 && starts[0] > 0 && useful(lines[starts[0] - 1]);
-  const segStart = starts.map((s, k) => {
-    if (!looksBack) return s;
-    const floor = k > 0 ? starts[k - 1] + 1 : 0;
-    let b = s;
-    while (b - 1 >= floor && s - (b - 1) <= 2 && useful(lines[b - 1])) b--;
-    return b;
-  });
+  const reachBack = (s, floor) => { for (let b = Math.max(floor, s - 3); b < s; b++) if (useful(lines[b])) return b; return s; };
+  const looksBack = starts.length > 0 && starts[0] > 0 && reachBack(starts[0], 0) < starts[0];
+  const segStart = starts.map((s, k) => looksBack ? reachBack(s, k > 0 ? starts[k - 1] + 1 : 0) : s);
   const blocks = starts.length === 1 && lines.length <= 40
     ? [lines]
     : starts.length
@@ -5133,6 +5142,11 @@ function parseFlights(lines) {
       // no codes at all: city names ("Dubai ... London Heathrow"), in the order they appear
       codes = [];
       const hits = [];
+      // airports named rather than coded ("London Gatwick") come first, so London isn't taken as Heathrow
+      Object.entries(AIRPORT_NAMES).forEach(([name, code]) => {
+        const i = text.search(new RegExp('\\b' + name + '\\b', 'i'));
+        if (i >= 0 && AIRPORTS[code] && !hits.some(h => h.city === AIRPORTS[code][0])) hits.push({ code, city: AIRPORTS[code][0], i });
+      });
       Object.entries(AIRPORTS).forEach(([code, [city]]) => {
         const i = text.search(new RegExp('\\b' + city.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'i'));
         if (i >= 0 && !hits.some(h => h.city === city)) hits.push({ code, city, i });
@@ -5189,7 +5203,8 @@ function parseStayRows(lines, knownCountries) {
   const mdy = t => { const out = []; const re = /\b(\d{1,2})[./](\d{1,2})[./](20\d{2}|\d{2})\b/g; let m; while ((m = re.exec(t))) { const d = okDate(yr(m[3]), +m[1], +m[2]); if (d) out.push({ date: d, index: m.index }); } return out; };
   lines.forEach((l, i) => {
     if (!HOTEL_BRANDS.test(l) || /\bbook\b|\boffer\b|\bearn\b|\bsave\b/i.test(l)) return;
-    const row = l + (lines[i + 1] && !HOTEL_BRANDS.test(lines[i + 1]) && findDates(l).length < 2 ? '  ' + lines[i + 1] : '');
+    let row = l;
+    for (let j = 1; j <= 3 && lines[i + j] && !HOTEL_BRANDS.test(lines[i + j]) && findDates(row).length < 2; j++) row += '  ' + lines[i + j];
     const ok = (a, b) => a && b && b > a && (Date.parse(b) - Date.parse(a)) <= 60 * 86400000;
     let ds = findDates(row), a = ds[0] && ds[0].date, b = ds[1] && ds[1].date;
     if (!ok(a, b)) { const m2 = mdy(row); if (m2.length >= 2 && ok(m2[0].date, m2[1].date)) { a = m2[0].date; b = m2[1].date; ds = m2; } }
@@ -5198,7 +5213,7 @@ function parseStayRows(lines, knownCountries) {
     if (seen.has(key)) return;
     seen.add(key);
     const cut = Math.min(ds[0] ? ds[0].index : row.length, ...[row.search(/\d/), row.length].filter(x => x >= 0));
-    const hotel = row.slice(0, cut).replace(/^(hotel\s+stay|stay(\s+at)?|stays?)\s*[:\-]?\s*/i, '').replace(/[\s,:\-–|]+$/, '').trim().slice(0, 70);
+    const hotel = (findDates(l).length ? row.slice(0, cut) : l).replace(/^(hotel\s+stay|stay(\s+at)?|stays?)\s*[:\-]?\s*/i, '').replace(/[\s,:\-–|]+$/, '').trim().slice(0, 70);
     let country = '', best = Infinity;
     knownCountries.forEach(c => { const k = row.search(new RegExp('\\b' + c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'i')); if (k >= 0 && k < best) { best = k; country = c; } });
     let city = '', cb = Infinity;
@@ -5356,17 +5371,54 @@ function parseHotels(lines, knownCountries) {
   return [{ kind: 'hotel', hotel: nameLine.trim().slice(0, 80), city, country, checkIn: cin, checkOut: cout, amount, currency }];
 }
 
+// ---- train tickets: a journey between two countries is a border crossing, like a flight ----
+// (a train inside one country is only a day there: it's read as a bill with the country of its stations)
+const STATIONS = [
+  [/London St\.? Pancras|St\.? Pancras Int/i, 'London', 'United Kingdom'], [/Ebbsfleet/i, 'Ebbsfleet', 'United Kingdom'], [/Ashford Int/i, 'Ashford', 'United Kingdom'],
+  [/Paris[\s-]+(Gare du )?Nord|Paris Gare de Lyon|Paris Est|Paris Montparnasse/i, 'Paris', 'France'], [/Lille[\s-]+Europe|Lille Flandres/i, 'Lille', 'France'],
+  [/Marne[\s-]la[\s-]Vall[ée]e/i, 'Marne-la-Vallée', 'France'], [/Lyon Part[\s-]Dieu/i, 'Lyon', 'France'], [/Marseille St/i, 'Marseille', 'France'], [/Nice[\s-]Ville/i, 'Nice', 'France'],
+  [/Brussels?[\s-]+(Midi|South)|Bruxelles[\s-]+Midi|Brussel[\s-]+Zuid/i, 'Brussels', 'Belgium'], [/Amsterdam Centraal/i, 'Amsterdam', 'Netherlands'], [/Rotterdam Centraal/i, 'Rotterdam', 'Netherlands'],
+  [/K[öo]ln Hbf|Cologne/i, 'Cologne', 'Germany'], [/Frankfurt[\s(]+(Main)?\)?\s*Hbf/i, 'Frankfurt', 'Germany'], [/M[üu]nchen Hbf|Munich (Central|Hbf)/i, 'Munich', 'Germany'], [/Berlin Hbf/i, 'Berlin', 'Germany'],
+  [/Z[üu]rich HB|Zurich (Main|Central)/i, 'Zurich', 'Switzerland'], [/Gen[eè]v[ea][\s-]Cornavin|Geneva/i, 'Geneva', 'Switzerland'], [/Basel SBB/i, 'Basel', 'Switzerland'], [/Lugano/i, 'Lugano', 'Switzerland'],
+  [/Wien Hbf|Vienna (Central|Hbf)/i, 'Vienna', 'Austria'], [/Innsbruck Hbf/i, 'Innsbruck', 'Austria'],
+  [/Roma Termini|Roma Tiburtina|Rome Termini/i, 'Rome', 'Italy'], [/Milano Centrale|Milano P(orta)?\.? Garibaldi|Milan Central/i, 'Milan', 'Italy'], [/Firenze S(anta)?\.? ?M(aria)?\.? ?N(ovella)?|Florence SMN/i, 'Florence', 'Italy'],
+  [/Venezia S(anta)?\.? ?Lucia|Venezia Mestre/i, 'Venice', 'Italy'], [/Napoli Centrale/i, 'Naples', 'Italy'], [/Torino Porta (Nuova|Susa)/i, 'Turin', 'Italy'], [/Bologna Centrale/i, 'Bologna', 'Italy'], [/Verona Porta Nuova/i, 'Verona', 'Italy'],
+  [/Barcelona[\s-]Sants/i, 'Barcelona', 'Spain'], [/Madrid[\s-](Puerta de )?Atocha|Madrid Chamart[íi]n/i, 'Madrid', 'Spain'],
+  [/Kings? Cross/i, 'London', 'United Kingdom'], [/London (Euston|Paddington|Victoria|Waterloo|Liverpool St|Marylebone|Bridge)/i, 'London', 'United Kingdom'],
+  [/Edinburgh( Waverley)?/i, 'Edinburgh', 'United Kingdom'], [/Manchester Piccadilly/i, 'Manchester', 'United Kingdom'], [/Glasgow (Central|Queen St)/i, 'Glasgow', 'United Kingdom'],
+  [/Birmingham New St/i, 'Birmingham', 'United Kingdom'], [/Oxford\b/, 'Oxford', 'United Kingdom'], [/York\b(?! ?City)/, 'York', 'United Kingdom'],
+];
+function parseTrains(lines) {
+  const text = lines.join('\n');
+  if (!/\b(train|rail|eurostar|trenitalia|italo|tgv|sncf|ouigo|sbb|[öo]bb|db bahn|deutsche bahn|renfe|thalys|lner|avanti|trainline|coach \w+\s+seat|carrozza|posto)\b/i.test(text)) return [];
+  const hits = [];
+  STATIONS.forEach(([re, city, country]) => { const m = re.exec(text); if (m && !hits.some(h => h.city === city && h.country === country)) hits.push({ city, country, i: m.index, name: m[0] }); });
+  hits.sort((a, b) => a.i - b.i);
+  if (hits.length < 2) return [];
+  const a = hits[0], b = hits.find(h => h.country !== a.country) || hits[1];
+  if (a.country === b.country) return [];   // inside one country: left to the bill reader
+  const dates = findDates(text);
+  if (!dates.length) return [];
+  const dep = dates[0].date;
+  const later = dates.find(d => d.date > dep && Date.parse(d.date) - Date.parse(dep) <= 2 * 86400000);
+  const no = (text.match(/\b(?:train|treno|zug|tren)\s*(?:no\.?|n\.?|number)?\s*(\d{3,5})\b/i) || [])[1];
+  const brand = (text.match(/\b(Eurostar|Trenitalia|Frecciarossa|Italo|TGV|Ouigo|SBB|ÖBB|Renfe|Thalys)\b/i) || [])[1] || 'Train';
+  return [{ kind: 'flight', mode: 'train', depDate: dep, arrDate: later ? later.date : dep, from: a.country, depCity: a.city, to: b.country, arrCity: b.city,
+    fromCode: '', toCode: '', flightNo: brand + (no ? ' ' + no : ''), yearGuessed: false, raw: lines.join(' \u00b7 ').replace(/\s+/g, ' ').slice(0, 220) }];
+}
 // lines of text from one PDF -> { flights, hotels }
 function fixOcrMonths(l) {
-  return l.replace(/(\d)\s?0(CT|ct)\b/g, '$1 O$2').replace(/\bN0V\b/g, 'NOV').replace(/(\d)\s?N0V\b/g, '$1 NOV').replace(/(\d)\s?(JU|AP)[1lI|](\b)/g, (m, d, a) => d + ' ' + a + (a === 'JU' ? 'L' : 'R'))
+  return l.replace(/\b(Mon|Tue|Wed|Thu|Fri|Sat|Sun)(\d)/gi, '$1 $2').replace(/(\d)\s?0(CT|ct)(?=\b|\d)/g, '$1 O$2').replace(/\bN0V\b/g, 'NOV').replace(/(\d)\s?N0V\b/g, '$1 NOV').replace(/(\d)\s?(JU|AP)[1lI|](\b)/g, (m, d, a) => d + ' ' + a + (a === 'JU' ? 'L' : 'R'))
     .replace(/(\d)\s?([A-Z]{3})(?=\b)/g, (m, d, mon) => /^(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)$/.test(mon) ? d + ' ' + mon : m);
 }
 function parseBookingText(lines, knownCountries) {
   const clean = lines.map(l => fixOcrMonths(l.replace(/\s+/g, ' ').trim())).filter(Boolean);
-  const flights = parseFlights(clean);
+  let flights = parseFlights(clean);
+  if (!flights.length) flights = parseTrains(clean);
   const rows = parseStayRows(clean, knownCountries);
   const nightStays = parseNightStays(clean, knownCountries);   // "25 SEP FRI - 30 SEP WED / 5 nights" stay lists
   let hotels = nightStays.length ? nightStays : rows.length >= 2 ? rows : parseHotels(clean, knownCountries);   // a statement lists several stays
+  if (!hotels.length && rows.length) hotels = rows;
   if (flights.length && rows.length < 2 && !/check[\s-]?in/i.test(clean.join(' '))) hotels = [];
   return { flights, hotels };
 }
@@ -5556,8 +5608,9 @@ async function ocrImageToLines(file, onProgress) {
   best.lines.upright = upright;
   return best.lines;
 }
-async function ocrPdfToLines(pdf, onProgress) {
+async function ocrPdfToLines(pdf, onProgress, psm) {
   const worker = await getOcrWorker(onProgress);
+  if (psm) await worker.setParameters({ tessedit_pageseg_mode: psm });
   const lines = [];
   const pages = Math.min(pdf.numPages, 10);
   for (let p = 1; p <= pages; p++) {
@@ -5572,9 +5625,10 @@ async function ocrPdfToLines(pdf, onProgress) {
     ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
     await page.render({ canvasContext: ctx, viewport: vp }).promise;
     const { data } = await worker.recognize(canvas);
-    (data.text || '').split('\n').map(l => l.replace(/\s+/g, ' ').trim()).filter(Boolean).forEach(l => lines.push(l));
+    (psm ? wordsToLines(data).join('\n') : data.text || '').split('\n').map(l => l.replace(/\s+/g, ' ').trim()).filter(Boolean).forEach(l => lines.push(l));
     canvas.width = canvas.height = 0;
   }
+  if (psm) await worker.setParameters({ tessedit_pageseg_mode: '3' });
   return lines;
 }
 
@@ -5685,7 +5739,28 @@ function parseReceipt(lines) {
   if (amount == null && !date) return null;
   if (amount == null && !currency) return null;
   const looksLikeBooking = /check[\s-]?in|check[\s-]?out|itinerar|reservation|booking (reference|confirm|number|ref)|your booking|confirmation number|e-?ticket|boarding pass/i.test(text) || lines.some(l => FLIGHT_NO.test(l));
-  return { kind: 'bill', date, amount, currency, vendor, category, looksLikeBooking };
+  return { kind: 'bill', date, amount, currency, vendor, category, looksLikeBooking, place: placeCountry(text) };
+}
+// The country a bill or ticket was issued in, from its address / tax number / city. The earliest
+// clue in the text wins (the address is at the top). '' when there's no clear clue.
+const PLACE_CLUES = [
+  [/\b(P\.?\s?IVA|Partita IVA|Italia|Roma|Milano|Firenze|Venezia|Napoli|Torino|Bologna|Genova|Verona|Capri|Positano|Amalfi|Sardegna|Sicilia|Palermo|Documento commerciale|Trenitalia|Italo)\b/i, 'Italy'],
+  [/\b(Kypros|Limassol|Lemesos|Nicosia|Lefkosia|Larnaca|Larnaka|Paphos|Pafos|Ayia Napa|Protaras)\b/i, 'Cyprus'],
+  [/\b(UAE|U\.A\.E\.?|Dubai|Abu Dhabi|Sharjah|Ras Al Khaimah|Fujairah|Ajman)\b/i, 'United Arab Emirates'],
+  [/\b(England|Scotland|Wales|London|Edinburgh|Manchester|Birmingham|Glasgow|Oxford|Cambridge|LNER|Avanti West Coast|GWR)\b|\bVAT\s*(Reg(istration)?\.?\s*)?(No\.?|Number)?\s*:?\s*GB|\b(?:[A-PR-UWYZ][A-HK-Y]?\d[A-Z\d]?) \d[ABD-HJLNP-UW-Z]{2}\b/, 'United Kingdom'],
+  [new RegExp('\\b(' + US_STATES + ')\\s\\d{5}(?:-\\d{4})?\\b|\\b(USA|U\\.S\\.A\\.?|New York|Los Angeles|San Francisco|Miami|Chicago|Las Vegas|Boston|Washington,? DC)\\b'), 'United States'],
+  [/\b(Paris|Lyon|Marseille|Cannes|Monaco|SIRET|TVA intracom)/, 'France'],
+  [/\b(Z(ü|ue)rich|Gen[eè]v[ea]|Genf|Basel|Bern|Lausanne|Zermatt|St\.? Moritz|Gstaad)\b/i, 'Switzerland'],
+  [/\b(Madrid|Barcelona|Marbella|Ibiza|Mallorca|Palma|Sevilla|Malaga|NIF|CIF)\b/, 'Spain'],
+  [/\b(Athens|Athina|Mykonos|Santorini|Thessaloniki|Crete|ΑΦΜ)\b/, 'Greece'],
+];
+function placeCountry(text) {
+  let best = '', at = Infinity;
+  const hit = (re, country) => { const i = text.search(re); if (i >= 0 && i < at) { at = i; best = country; } };
+  PLACE_CLUES.forEach(([re, c]) => hit(re, c));
+  ['United Kingdom', 'United States', 'United Arab Emirates', 'Italy', 'Cyprus', 'France', 'Spain', 'Greece', 'Switzerland', 'Germany', 'Portugal', 'Monaco', 'Austria', 'Netherlands', 'Belgium', 'Ireland']
+    .forEach(c => hit(new RegExp('\\b' + c + '\\b', 'i'), c));
+  return best;
 }
 const CURRENCY_COUNTRY = { AED: 'United Arab Emirates', GBP: 'United Kingdom', CHF: 'Switzerland', SGD: 'Singapore', PHP: 'Philippines', KES: 'Kenya', SAR: 'Saudi Arabia', QAR: 'Qatar', OMR: 'Oman', BHD: 'Bahrain', KWD: 'Kuwait', INR: 'India', JPY: 'Japan', HKD: 'Hong Kong', AUD: 'Australia', CAD: 'Canada', THB: 'Thailand', MVR: 'Maldives', LKR: 'Sri Lanka', TRY: 'Turkey', EGP: 'Egypt', ZAR: 'South Africa', USD: 'United States' };
 
@@ -5965,7 +6040,7 @@ function importStatus(it) {
     const t = findTripForDay(parseDate(it.date));
     if (it.looksLikeBooking) return { code: 'confirm', text: 'This looks like a booking rather than a bill, and its stay or flight couldn\u2019t be read \u2014 check the date and total before adding it as a bill.' };
     if (!t) return it.country ? { code: 'confirm', text: 'No trip in the ledger on ' + it.date + ' \u2014 adding this bill starts a receipt-only trip in ' + it.country + ' that day.' } : { code: 'check', text: 'No trip in the ledger that day \u2014 pick the country' };
-    if (it.country && t.country !== it.country) return { code: 'overlap', text: 'Overlaps: the ledger has him in ' + tripPlaceLabel(t) + ' that day, but you chose ' + it.country + '.' };
+    if (it.country && t.country !== it.country) return { code: 'overlap', text: 'Overlaps: the ledger has him in ' + tripPlaceLabel(t) + ' that day, but ' + (it.countryFromBill ? 'the bill\u2019s address is in ' : 'you chose ') + it.country + '.' };
     if (it.currency && CURRENCY_COUNTRY[it.currency] && it.currency !== 'USD' && CURRENCY_COUNTRY[it.currency] !== t.country && !(it.currency === 'EUR'))
       return { code: 'confirm', text: 'The bill is in ' + it.currency + ' but the ledger has him in ' + t.country + ' that day \u2014 is that right?' };
     return { code: 'new', text: 'New' };
@@ -6099,11 +6174,14 @@ async function readPdfFiles(files) {
   };
   // flights and hotel stays first; if a document has neither, it's read as a bill / receipt
   const readItems = lines => {
-    const r = parseBookingText(lines, WORLD_COUNTRIES);
-    const items = r.flights.concat(r.hotels);
-    if (items.length) return items;
-    const bill = parseReceipt(lines);
-    return bill ? [bill] : [];
+    US_DATES = looksAmerican(lines.join('\n'));
+    try {
+      const r = parseBookingText(lines, WORLD_COUNTRIES);
+      const items = r.flights.concat(r.hotels);
+      if (items.length) return items;
+      const bill = parseReceipt(lines);
+      return bill ? [bill] : [];
+    } finally { US_DATES = false; }
   };
   const unread = [], fresh = [];
   for (const f of files) {
@@ -6121,6 +6199,15 @@ async function readPdfFiles(files) {
           lines = await ocrPdfToLines(pdf, progress(f.name)); viaOcr = true;
         }
         items = readItems(lines);
+        if (viaOcr && !items.some(it => it.kind !== 'bill')) {
+          // boxes and big lettering (boarding passes) read better as scattered text, placed by position
+          try {
+            status.textContent = 'Reading ' + f.name + ' a second way…';
+            const sparse = await ocrPdfToLines(pdf, progress(f.name), '11');
+            const again = readItems(sparse);
+            if (again.some(it => it.kind !== 'bill') || (!items.length && again.length)) { items = again; lines = sparse; }
+          } catch (e) { /* keep the first reading */ }
+        }
         if (!items.length && !viaOcr) {
           // text that can't be used (scrambled fonts, text drawn as shapes): read the page image instead
           try {
@@ -6187,7 +6274,8 @@ async function readPdfFiles(files) {
       if (it.kind === 'bill') {
         // the country: the trip the ledger has on that day, else the bill's currency
         const t = it.date && findTripForDay(parseDate(it.date));
-        it.country = t ? t.country : (CURRENCY_COUNTRY[it.currency] && WORLD_COUNTRIES.includes(CURRENCY_COUNTRY[it.currency]) ? CURRENCY_COUNTRY[it.currency] : '');
+        if (it.place && WORLD_COUNTRIES.includes(it.place)) { it.country = it.place; it.countryFromBill = true; }
+        else it.country = t ? t.country : (CURRENCY_COUNTRY[it.currency] && WORLD_COUNTRIES.includes(CURRENCY_COUNTRY[it.currency]) ? CURRENCY_COUNTRY[it.currency] : '');
       }
       const key = importKey(it);
       if (![...importItems, ...fresh].some(o => importKey(o) === key)) fresh.push(it);
@@ -6215,7 +6303,8 @@ async function readPdfFiles(files) {
   renderImportAdded();
   const fl = toAdd.filter(i => i.kind === 'flight').length, ho = toAdd.filter(i => i.kind === 'hotel').length, bi = toAdd.filter(i => i.kind === 'bill').length;
   const held = fresh.filter(it => !it.added && !it.discarded).length;
-  const addedParts = [fl ? fl + ' flight' + (fl > 1 ? 's' : '') : '', ho ? ho + ' hotel stay' + (ho > 1 ? 's' : '') : '', bi ? bi + ' bill' + (bi > 1 ? 's' : '') : ''].filter(Boolean);
+  const tr = toAdd.filter(i => i.kind === 'flight' && i.mode === 'train').length, fo = fl - tr;
+  const addedParts = [fo ? fo + ' flight' + (fo > 1 ? 's' : '') : '', tr ? tr + ' train journey' + (tr > 1 ? 's' : '') : '', ho ? ho + ' hotel stay' + (ho > 1 ? 's' : '') : '', bi ? bi + ' bill' + (bi > 1 ? 's' : '') : ''].filter(Boolean);
   lastImportSummary = (toAdd.length ? '<span style="color:var(--green);">✓ Added ' + addedParts.join(', ').replace(/, ([^,]*)$/, ' and $1') + ' to the calendar.</span>' : (!unread.length && !held && !already.length ? 'Nothing new found.' : '')) +
     (already.length ? ' Skipped ' + already.length + ' already in the ledger.' : '') +
     (held ? ' <b>' + held + ' need your check below.</b>' : '') +
@@ -6317,7 +6406,7 @@ function showMonthOf(dateStr) {
 }
 function importItemLabel(it) {
   const dd = s => s ? new Date(parseDate(s)).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }) : '?';
-  if (it.kind === 'flight') return '\u2708\ufe0f ' + dd(it.depDate) + ' \u00b7 ' + esc(it.flightNo || 'Flight') + ' \u00b7 ' + esc(it.depCity || it.from) + ' (' + esc(it.from) + ') \u2192 ' + esc(it.arrCity || it.to) + ' (' + esc(it.to) + ')' + (it.arrDate && it.arrDate !== it.depDate ? ', arrives ' + dd(it.arrDate) : '');
+  if (it.kind === 'flight') return (it.mode === 'train' ? '\u{1F686} ' : '\u2708\ufe0f ') + dd(it.depDate) + ' \u00b7 ' + esc(it.flightNo || 'Flight') + ' \u00b7 ' + esc(it.depCity || it.from) + ' (' + esc(it.from) + ') \u2192 ' + esc(it.arrCity || it.to) + ' (' + esc(it.to) + ')' + (it.arrDate && it.arrDate !== it.depDate ? ', arrives ' + dd(it.arrDate) : '');
   if (it.kind === 'hotel') return '\u{1F3E8} ' + dd(it.checkIn) + ' \u2192 ' + dd(it.checkOut) + ' \u00b7 ' + esc(it.hotel || 'Hotel') + ' \u00b7 ' + esc(it.city ? it.city + ', ' : '') + esc(it.country);
   return '\u{1F9FE} ' + dd(it.date) + ' \u00b7 ' + esc(it.vendor || 'Bill') + ' \u00b7 ' + esc(it.category) + (it.amount != null && it.amount !== '' ? ' \u00b7 ' + Number(it.amount).toFixed(2) + ' ' + esc(it.currency || '') : '');
 }
