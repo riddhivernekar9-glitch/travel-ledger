@@ -4984,7 +4984,7 @@ async function cleanupLegacyUndoFields() {
 // A tab left open keeps running the old version after an update is uploaded, so new bills can
 // miss newer features (e.g. a type that didn't exist yet). Every few minutes, and whenever the
 // tab comes back into view, compare this page's version with the one that's live.
-const APP_VERSION = '2026-10-20e';
+const APP_VERSION = '2026-10-21a';
 async function checkForNewerVersion() {
   try {
     const res = await fetch(location.href.split('#')[0], { cache: 'no-store' });
@@ -5208,6 +5208,53 @@ function parseStayRows(lines, knownCountries) {
   });
   return stays;
 }
+// Loyalty-account stay lists (Hilton Honors "Stays" page and similar): each stay is a block
+//   25 SEP FRI  (moon)  30 SEP WED / 5 nights / DoubleTree by Hilton London - Marble Arch / Points earned
+// often with no year. The weekday settles it (25 Sep fell on a Friday in 2026), and the number of
+// nights checks the check-out. Without a weekday, the list is taken as newest first, up to today.
+const STAY_MONS = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, sept: 8, oct: 9, nov: 10, dec: 11 };
+const STAY_DOWS = { sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6 };
+function parseNightStays(lines, knownCountries) {
+  const text = lines.join('\n');
+  if (!/\b\d{1,3}\s*nights?\b/i.test(text)) return [];
+  // whole words only, so "20OctTue" splits into 20 / Oct / Tue
+  const MON = '(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\\.?';
+  const DOW = '(?:(mon(?:day)?|tue(?:s(?:day)?)?|wed(?:nesday)?|thu(?:r(?:s(?:day)?)?)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)\\.?)?';
+  const re = new RegExp('(\\d{1,2})\\s*' + MON + '\\s*' + DOW + '[^\\d]{0,8}?(\\d{1,2})\\s*' + MON + '\\s*' + DOW + '[^\\d]{0,16}?(\\d{1,3})\\s*nights?\\b', 'gi');
+  const DAY = 86400000, today = Date.now(), cy = new Date().getUTCFullYear();
+  const out = [], seen = new Set();
+  let prevIn = null, m;
+  while ((m = re.exec(text))) {
+    const [, d1, mo1, w1, d2, mo2, w2, nTxt] = m;
+    const n = +nTxt, M1 = STAY_MONS[mo1.toLowerCase().slice(0, 3)], M2 = STAY_MONS[mo2.toLowerCase().slice(0, 3)];
+    if (M1 == null || M2 == null || !n || n > 60) continue;
+    let pick = null;
+    for (let y = cy + 1; y >= cy - 15 && !pick; y--) {
+      const tin = Date.UTC(y, M1, +d1), tout = tin + n * DAY, o = new Date(tout), i = new Date(tin);
+      if (i.getUTCDate() !== +d1 || o.getUTCMonth() !== M2 || o.getUTCDate() !== +d2) continue;  // nights must match the check-out
+      if (w1 && i.getUTCDay() !== STAY_DOWS[w1.toLowerCase().slice(0, 3)]) continue;
+      if (w2 && o.getUTCDay() !== STAY_DOWS[w2.toLowerCase().slice(0, 3)]) continue;
+      if (w1) { if (tin > today + 400 * DAY) continue; }
+      else if (tin > (prevIn != null ? prevIn + DAY : today)) continue;
+      pick = { tin, tout };
+    }
+    if (!pick) continue;
+    prevIn = pick.tin;
+    // the hotel: the next line naming a hotel, within a few lines after "n nights"
+    const after = text.slice(m.index + m[0].length).split('\n').map(x => x.trim()).filter(Boolean).slice(0, 4);
+    const hotel = (after.find(x => HOTEL_BRANDS.test(x) && !/points|receipt|book again|summary/i.test(x)) || '').replace(/\s+/g, ' ').slice(0, 80);
+    const checkIn = new Date(pick.tin).toISOString().slice(0, 10), checkOut = new Date(pick.tout).toISOString().slice(0, 10);
+    const key = checkIn + checkOut + hotel;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    let country = '', best = Infinity, city = '', cb = Infinity;
+    knownCountries.forEach(c => { const k = hotel.search(new RegExp('\\b' + c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'i')); if (k >= 0 && k < best) { best = k; country = c; } });
+    Object.values(AIRPORTS).forEach(([c, co]) => { const k = hotel.search(new RegExp('\\b' + c + '\\b', 'i')); if (k >= 0 && k < cb && (!country || co === country)) { cb = k; city = c; } });
+    if (!country && city) country = Object.values(AIRPORTS).find(x => x[0] === city)[1];
+    out.push({ kind: 'hotel', checkIn, checkOut, hotel: hotel || 'Hotel', city, country, amount: null, currency: '', yearGuessed: !w1 && !w2, raw: m[0].replace(/\s+/g, ' ') + ' \u00b7 ' + hotel });
+  }
+  return out;
+}
 function parseHotels(lines, knownCountries) {
   const text = lines.join('\n');
   const labelIn = /(check[\s-]?in|arrival|arriving|arrive)\b/i, labelOut = /(check[\s-]?out|departure|departing|depart)\b/i;
@@ -5262,7 +5309,8 @@ function parseBookingText(lines, knownCountries) {
   const clean = lines.map(l => fixOcrMonths(l.replace(/\s+/g, ' ').trim())).filter(Boolean);
   const flights = parseFlights(clean);
   const rows = parseStayRows(clean, knownCountries);
-  let hotels = rows.length >= 2 ? rows : parseHotels(clean, knownCountries);   // a statement lists several stays
+  const nightStays = parseNightStays(clean, knownCountries);   // "25 SEP FRI - 30 SEP WED / 5 nights" stay lists
+  let hotels = nightStays.length ? nightStays : rows.length >= 2 ? rows : parseHotels(clean, knownCountries);   // a statement lists several stays
   if (flights.length && rows.length < 2 && !/check[\s-]?in/i.test(clean.join(' '))) hotels = [];
   return { flights, hotels };
 }
@@ -5881,6 +5929,7 @@ function importStatus(it) {
       .forEach(t => clashes.set(t.id, t));
   }
   if (clashes.size) return { code: 'overlap', text: 'Overlaps: ' + [...clashes.values()].map(t => tripPlaceLabel(t) + ' ' + t.entry + ' → ' + t.exit).join('; ') };
+  if (it.yearGuessed) return { code: 'confirm', text: 'The statement doesn\u2019t show the year or the weekday, so the year is a best guess \u2014 check the dates, then add it.' };
   return { code: 'new', text: 'New' };
 }
 
