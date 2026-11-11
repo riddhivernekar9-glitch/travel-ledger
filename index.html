@@ -223,6 +223,8 @@
   .entry-box[open] > summary::after { content: "\2212"; }
   .entry-box[open] > summary { margin-bottom: 12px; }
   .entry-head { margin: 4px 2px 8px; }
+  .imp-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
+  .imp-lbl { min-width: 62px; font-weight: 600; color: var(--ink); }
   .hist-head { font-size: 15px; margin: 18px 0 6px; }
   body.read-only .uk-ties select, body.read-only .uk-ties input, body.read-only .prof-opts select, body.read-only [data-key] > select.mini { pointer-events: none; opacity: 0.65; }
   .undo-tools { margin-left: auto; display: inline-flex; gap: 6px; }
@@ -5035,7 +5037,7 @@ async function cleanupLegacyUndoFields() {
 // A tab left open keeps running the old version after an update is uploaded, so new bills can
 // miss newer features (e.g. a type that didn't exist yet). Every few minutes, and whenever the
 // tab comes back into view, compare this page's version with the one that's live.
-const APP_VERSION = '2026-11-11c';
+const APP_VERSION = '2026-11-11d';
 async function checkForNewerVersion() {
   try {
     const res = await fetch(location.href.split('#')[0], { cache: 'no-store' });
@@ -6163,15 +6165,19 @@ function renderImportReview() {
       ? '<b>\u{1F9FE}</b> ' + textIn('vendor', i, it.vendor, 'name', 170) + ' <select data-imp-field="category" data-imp-i="' + i + '">' + BILL_TYPES.map(c => '<option' + (c === it.category ? ' selected' : '') + '>' + c + '</option>').join('') + '</select> ' +
         textIn('amount', i, it.amount == null ? '' : it.amount, 'total', 80) + textIn('currency', i, it.currency, 'cur.', 50) + ' ' + countrySelect('country', i, it.country)
       : it.kind === 'flight'
-      ? '<b>✈ ' + esc(it.flightNo || 'Flight') + '</b> ' + textIn('depCity', i, it.depCity, 'from city') + countrySelect('from', i, it.from) +
-        ' → ' + textIn('arrCity', i, it.arrCity, 'to city') + countrySelect('to', i, it.to)
+      ? '<b>' + (it.mode === 'train' ? '\u{1F686} ' : '✈ ') + esc(it.flightNo || 'Flight') + '</b>' +
+        '<div class="imp-row"><span class="imp-lbl">From</span>' + textIn('depCity', i, it.depCity, 'city') + countrySelect('from', i, it.from) + '</div>' +
+        '<div class="imp-row"><span class="imp-lbl">To</span>' + textIn('arrCity', i, it.arrCity, 'city') + countrySelect('to', i, it.to) + '</div>'
       : '<b>\u{1F3E8} ' + textIn('hotel', i, it.hotel, 'hotel name', 190) + '</b> ' + textIn('city', i, it.city, 'city') + countrySelect('country', i, it.country);
     const yearBtns = (it.kind === 'flight' && it.depDate && it.yearGuessed)
       ? ' <span class="hint">year:</span> ' + [0, 1, 2].map(k => new Date().getFullYear() - k).reverse().map(y =>
           '<button type="button" class="btn-secondary hc-btn" style="padding:2px 8px; margin:0 2px;" data-imp-year="' + i + '" data-year="' + y + '">' + y + '</button>').join('')
       : '';
+    const timeIn = (field, v) => '<input type="time" data-imp-field="' + field + '" data-imp-i="' + i + '" value="' + esc(v || '') + '" style="width:auto;">';
     const dates = it.kind === 'bill' ? dateIn('date', i, it.date) : it.kind === 'flight'
-      ? dateIn('depDate', i, it.depDate) + (it.arrDate && it.arrDate !== it.depDate ? ' <span class="hint">arr.</span> ' + dateIn('arrDate', i, it.arrDate) : '')
+      ? '<div class="imp-row"><span class="imp-lbl">Departs</span>' + dateIn('depDate', i, it.depDate) + timeIn('depTime', it.depTime) + '</div>' +
+        '<div class="imp-row"><span class="imp-lbl">Lands</span>' + dateIn('arrDate', i, it.arrDate || it.depDate) + timeIn('arrTime', it.arrTime) + '</div>' +
+        '<span class="hint">Times are optional, local time at each airport.</span>'
       : '<span class="hint">in</span> ' + dateIn('checkIn', i, it.checkIn) + ' <span class="hint">out</span> ' + dateIn('checkOut', i, it.checkOut);
     const canAdd = it._status.code === 'overlap' || it._status.code === 'confirm';
     return '<div style="border-top:1px solid var(--line); padding:8px 0;">' + details +
@@ -6188,8 +6194,11 @@ function renderImportReview() {
     '<strong>' + held.length + ' item(s) need your check</strong> — they clash with what’s already in the ledger or a detail is uncertain, so they were <u>not</u> added yet.' +
     (lookAlikes.length > 1 ? '<div style="margin-top:8px;"><button type="button" class="btn-primary hc-btn" id="impReplaceAll">Correct all ' + lookAlikes.length + ' look-alike flights to the file’s dates</button>' +
       ' <span class="hint">Each logged flight takes the date in the file; nothing else changes. Undo reverses it.</span></div>' : '') + rows + '</div>';
-  el.querySelectorAll('[data-imp-field]').forEach(inp => inp.onchange = async () => {
+  // Dates and times are picked with the phone's wheel, which reports every turn: keep the value as it
+  // changes, and only act when the picker is closed, so it doesn't snap shut half-way through.
+  const process = async inp => {
     const it = importItems[+inp.dataset.impI];
+    if (!it) return;
     it[inp.dataset.impField] = inp.value;
     if (it.kind === 'flight' && inp.dataset.impField === 'depDate' && (!it.arrDate || it.arrDate < inp.value)) it.arrDate = inp.value;
     if (/Date$/.test(inp.dataset.impField)) it.yearGuessed = false;
@@ -6199,8 +6208,25 @@ function renderImportReview() {
     // once corrected so that it's new and clash-free, it goes straight in like the rest
     const st = importStatus(it);
     if (st.code === 'new') { await addImportedItems([it]); return; }
-    if (st.code === 'already') it.discarded = true;
+    if (st.code === 'already') {
+      // the flight is already logged: just give it the times from here
+      const leg = it.kind === 'flight' && legs.find(l => l.depDate === it.depDate && l.from === it.from && l.to === it.to);
+      if (leg && ((it.depTime && leg.depTime !== it.depTime) || (it.arrTime && leg.arrTime !== it.arrTime))) {
+        await pushUndo();
+        if (it.depTime) leg.depTime = it.depTime; if (it.arrTime) leg.arrTime = it.arrTime;
+        await saveLegs(); renderAll();
+        document.getElementById('pdfImportStatus').insertAdjacentHTML('beforeend', '<div style="color:var(--green); margin-top:6px;">✓ Times added to the flight already in the ledger (' + niceDate(parseDate(leg.depDate)) + ').</div>');
+      }
+      it.discarded = true;
+    }
     renderImportReview();
+  };
+  el.querySelectorAll('[data-imp-field]').forEach(inp => {
+    if (inp.type === 'date' || inp.type === 'time') {
+      inp.oninput = () => { const it = importItems[+inp.dataset.impI]; if (it) it[inp.dataset.impField] = inp.value; inp.dataset.dirty = '1'; };
+      inp.onchange = inp.oninput;
+      inp.onblur = () => { if (inp.dataset.dirty) { delete inp.dataset.dirty; process(inp); } };
+    } else inp.onchange = () => process(inp);
   });
   el.querySelectorAll('[data-imp-yes]').forEach(b => b.onclick = async () => { b.disabled = true; await addImportedItems([importItems[+b.dataset.impYes]]); });
   // picking the year is the answer: the flight goes in (unless it clashes, then it says why)
