@@ -427,8 +427,8 @@
         <p><b>United Kingdom</b> &mdash; tax year 6 April to 5 April. A day counts only if he is in the UK <b>at midnight</b>: the arrival day counts, the day he leaves doesn&rsquo;t, and pure transit doesn&rsquo;t. Under 16 days (if UK-resident in any of the last 3 tax years) or under 46 (if not) = automatically non-resident; 183 or more = automatically resident; in between, his UK ties decide (family, home, work, 90 days in either of the last 2 years, and for leavers, the country tie). Rare extras not tracked here: up to 60 days of exceptional circumstances can be ignored, and a &ldquo;deeming&rdquo; rule can count some departure days for people with 3+ ties and 30+ such days. <a href="https://www.gov.uk/government/publications/rdr3-statutory-residence-test-srt" target="_blank" rel="noopener">HMRC RDR3</a></p>
         <p><b>Schengen</b> &mdash; 90 days in any rolling 180-day period, all Schengen countries together. Entry and exit days both count. <a href="https://eur-lex.europa.eu/eli/reg/2016/399/oj" target="_blank" rel="noopener">Schengen Borders Code, Regulation (EU) 2016/399</a></p>
         <p><b>Italy</b> &mdash; calendar year. Resident if, for most of the year (183 days, or 184 in a leap year), he is physically present, registered, or has his habitual home or the centre of his personal and family life in Italy. Since 2024 any part of a day counts. <a href="https://agenziaentrate.gov.it/portale/documents/20143/6519685/Circolare_20_del_4_11_2024_Eng.pdf/bdacb2e0-a699-5180-719e-665210459d75" target="_blank" rel="noopener">Agenzia delle Entrate, Circular 20/E (2024)</a></p>
-        <p><b>Cyprus</b> &mdash; calendar year. Resident with more than 183 days, or under the 60-day rule: 60+ days in Cyprus, no more than 183 days in any other single country, a Cyprus business, job or directorship, and a home in Cyprus. From 1 January 2026 he no longer has to be non-resident everywhere else. The departure day counts as outside Cyprus and the arrival day as inside; in and out on the same day counts as inside, out and back on the same day as outside. <a href="https://taxsummaries.pwc.com/cyprus/individual/residence" target="_blank" rel="noopener">PwC Tax Summaries &ndash; Cyprus</a></p>
-        <p><b>United States</b> &mdash; substantial presence test: at least 31 days in the current year <b>and</b> 183 days over three years, counting all days this year, a third of last year&rsquo;s and a sixth of the year before. Any part of a day counts; transit under 24 hours between two places outside the US doesn&rsquo;t. A closer-connection exception (Form 8840) can apply below 183 days in the current year. <a href="https://www.irs.gov/individuals/international-taxpayers/substantial-presence-test" target="_blank" rel="noopener">IRS</a></p>
+        <p><b>Cyprus</b> &mdash; calendar year. Resident with more than 183 days, or under the 60-day rule: 60+ days in Cyprus, no more than 183 days in any other single country, a Cyprus business, job or directorship that is still held on 31 December, and a home in Cyprus. From 1 January 2026 he no longer has to be non-resident everywhere else. The departure day counts as outside Cyprus and the arrival day as inside; in and out on the same day counts as inside, out and back on the same day as outside. <a href="https://taxsummaries.pwc.com/cyprus/individual/residence" target="_blank" rel="noopener">PwC Tax Summaries &ndash; Cyprus</a></p>
+        <p><b>United States</b> &mdash; substantial presence test: at least 31 days in the current year <b>and</b> 183 days over three years, counting all days this year, a third of last year&rsquo;s and a sixth of the year before. Any part of a day counts; transit under 24 hours between two places outside the US doesn&rsquo;t (left out automatically when both flight times are entered). A closer-connection exception (Form 8840) can apply below 183 days in the current year. <a href="https://www.irs.gov/individuals/international-taxpayers/substantial-presence-test" target="_blank" rel="noopener">IRS</a></p>
         <p><b>UAE</b> &mdash; resident with 183 days in any 12 consecutive months, or 90 days with UAE/GCC nationality or a residence permit plus a home or a job/business in the UAE, or if the UAE is his main home and centre of interests. Any part of a day counts. <a href="https://www.ey.com/en_gl/technical/tax-alerts/uae-issues-additional-guidance-on-determination-of-tax-residency" target="_blank" rel="noopener">Cabinet Decision 85/2022 (EY summary)</a></p>
         <p>These counts are a guide for his tax adviser, who should confirm residence each year. A monthly check looks for rule changes; a change is applied from the date it starts, so earlier years keep the rule that applied then.</p>
       </div>
@@ -759,12 +759,16 @@
     <p class="hint" style="margin-bottom:16px;">Usually not needed: uploading a document does this for you.</p>
   <div class="step">
     <h2>Enter a flight</h2>
-    <p class="hint" style="margin-bottom:10px;">Dates and places only, no times. Leave the landing date blank if it&rsquo;s the same day.</p>
+    <p class="hint" style="margin-bottom:10px;">Leave the landing date blank if it&rsquo;s the same day. Times are optional, in local time at each airport; they let the US 24-hour transit rule apply and show on the calendar.</p>
     <form class="entry" id="legForm">
       <input type="hidden" id="legEditId" value="">
       <div>
         <label>Departure date</label>
         <input type="date" id="legDepDate" required>
+      </div>
+      <div>
+        <label>Departure time (optional)</label>
+        <input type="time" id="legDepTime">
       </div>
       <div>
         <label>From (departed)</label>
@@ -781,6 +785,10 @@
       <div>
         <label>Landing date (if different)</label>
         <input type="date" id="legArrDate">
+      </div>
+      <div>
+        <label>Landing time (optional)</label>
+        <input type="time" id="legArrTime">
       </div>
       <div>
         <label>Arrival city (optional)</label>
@@ -1716,6 +1724,29 @@ function countedDays(pm, inSet, mode) {
     return !isIn(d - DAY_MS);                                                                 // one-day visit (no flights logged) = inside
   });
 }
+// US: a stop of under 24 hours between two places outside the US, on the way through, isn't a
+// US day (IRS substantial presence test). Only applied when both times are known: landing in the
+// US and the next flight out. Returns the days to leave out, with what they were for the card.
+function usTransitStops() {
+  const isUS = c => mapCountryToRegion(c) === 'US';
+  const at = (d, t) => Date.parse(d + 'T' + t + ':00Z');
+  const sorted = [...legs].sort((a, b) => (a.depDate + (a.depTime || '')).localeCompare(b.depDate + (b.depTime || '')));
+  const out = [];
+  for (let i = 0; i + 1 < sorted.length; i++) {
+    const a = sorted[i], b = sorted[i + 1];
+    if (isUS(a.from) || !isUS(a.to) || !isUS(b.from) || isUS(b.to) || !a.arrTime || !b.depTime) continue;
+    const hrs = (at(b.depDate, b.depTime) - at(a.arrDate || a.depDate, a.arrTime)) / 3600000;
+    if (hrs < 0 || hrs >= 24) continue;
+    const days = [];
+    for (let d = parseDate(a.arrDate || a.depDate); d <= parseDate(b.depDate); d += DAY_MS) days.push(d);
+    out.push({ days, hours: Math.round(hrs * 10) / 10, from: a.from, to: b.to });
+  }
+  return out;
+}
+function usCountedDays(pm) {
+  const skip = new Set(); usTransitStops().forEach(s => s.days.forEach(d => skip.add(d)));
+  return countedDays(pm, c => mapCountryToRegion(c) === 'US', 'anyPart').filter(d => !skip.has(d));
+}
 const inRange = (days, a, b) => days.filter(d => d >= a && d <= b);
 const nthDay = (days, a, b, n) => { const r = inRange(days, a, b); return r.length >= n ? r[n - 1] : null; };
 function ledgerYears(asofYear) {
@@ -1857,7 +1888,8 @@ const PROFILE_Q = {
   uae: [['gccNational', 'UAE or other GCC national?', 'yn'], ['uaeVisa', 'UAE residence visa?', 'yn'], ['uaeHome', 'A home in the UAE?', 'yn'], ['uaeWork', 'A job or business in the UAE?', 'yn'],
         ['uaeCentre', 'Is the UAE his main home and the centre of his personal and financial life?', 'yn', 'If yes he is UAE resident whatever the days.']],
   italy: [['italyRegistered', 'Registered as living in Italy (anagrafe)?', 'yn'], ['italyCentre', 'Habitual home, or centre of his personal and family life, in Italy?', 'yn', 'Either makes him resident in Italy whatever the days.']],
-  cyprus: [['cyBusiness', 'A business, job or directorship in Cyprus?', 'yn'], ['cyHome', 'A home in Cyprus (owned or rented)?', 'yn', 'With both, 60+ days can be enough (the 60-day rule).']],
+  cyprus: [['cyBusiness', 'A business, job or directorship in Cyprus?', 'yn'], ['cyYearEnd', 'Is that business, job or directorship still held on 31 December (not ended during the year)?', 'yn', 'The 60-day rule needs it to last to the end of the year.'],
+           ['cyHome', 'A home in Cyprus (owned or rented)?', 'yn', 'With these, 60+ days can be enough (the 60-day rule).']],
 };
 const profOpen = {};
 function profilePanel(key) {
@@ -1885,6 +1917,7 @@ function profileSummary() {
   if (p.italyRegistered === true) out.push('registered in Italy');
   if (p.italyCentre === true) out.push('home/centre of life in Italy');
   if (p.cyBusiness === true) out.push('business/job in Cyprus');
+  if (p.cyYearEnd === false) out.push('Cyprus role ends before 31 Dec');
   if (p.cyHome === true) out.push('home in Cyprus');
   return out;
 }
@@ -1962,7 +1995,7 @@ function computeStats(asof) {
 
   // ---- US: substantial presence test ----
   {
-    const days = countedDays(pm, region('US'), 'anyPart');
+    const days = usCountedDays(pm);
     const yr = (y, upto) => inRange(days, yStart(y), Math.min(yEnd(y), upto)).length;
     const test = (y, upto) => {
       const cur = yr(y, upto), prev = yr(y - 1, Infinity), prev2 = yr(y - 2, Infinity);
@@ -1976,6 +2009,8 @@ function computeStats(asof) {
     const lines = [];
     if (t.cur < 31) lines.push('Only ' + t.cur + ' day(s) in ' + asofYear + ' — under the 31-day minimum, so the test isn’t met this year whatever the total.');
     if (t.met) lines.push('<span class="lim-hit">Test met on ' + niceDate(t.metOn) + '</span>');
+    usTransitStops().filter(s => s.days.some(d => d >= yStart(asofYear) && d <= yEnd(asofYear))).forEach(s =>
+      lines.push('Not counted: ' + s.days.map(d => niceDate(d)).join(' – ') + ', a ' + s.hours + '-hour stop between ' + s.from + ' and ' + s.to + ' (US transit under 24 hours). Check he only passed through.'));
     const history = years.map(y => {
       const h = test(y, asof);
       return { label: String(y) + (y === asofYear ? ' (so far)' : ''), days: h.cur, reached: h.met,
@@ -1984,7 +2019,7 @@ function computeStats(asof) {
     stats.push({ key: 'us', title: 'United States', ruleLabel: 'Substantial presence · 31+ days this year AND 183 weighted · any part of a day',
       used: shown, threshold: 183, direction: 'atMost', leftCount: Math.max(t.need - 1 - t.cur, 0), leftText: 'more days allowed this year',
       statusClass: t.met ? 'over' : t.weighted >= 150 && t.cur >= 31 ? 'warn' : 'ok',
-      note: asofYear + ': ' + t.cur + ' + ' + (asofYear - 1) + ': ' + t.prev + '÷3 + ' + (asofYear - 2) + ': ' + t.prev2 + '÷6. Transit under 24 hours between two foreign places doesn’t count — mark those days in the notes for his adviser.',
+      note: asofYear + ': ' + t.cur + ' + ' + (asofYear - 1) + ': ' + t.prev + '÷3 + ' + (asofYear - 2) + ': ' + t.prev2 + '÷6. Transit under 24 hours between two foreign places doesn’t count: left out automatically when the landing time and the next departure time are both entered.',
       lines, history, historyHead: 'Year · US days · weighted total', reachedWord: 'test met',
       resetInfo: 'New count from 1 Jan ' + (asofYear + 1) + ', but a third of this year carries into next year’s total and a sixth into the year after.' });
   }
@@ -2046,7 +2081,7 @@ function computeStats(asof) {
       return Object.entries(other).sort((a, b) => b[1] - a[1])[0];
     };
     const top = otherMax(asofYear);
-    lines.push('60-day rule: ' + Math.min(used, 60) + '/60 Cyprus days' + (top ? '; most days in one other country: ' + top[0] + ' ' + top[1] + ' (must stay 183 or under)' : '') + '. Also needs a Cyprus business, job or directorship, and a home in Cyprus.');
+    lines.push('60-day rule: ' + Math.min(used, 60) + '/60 Cyprus days' + (top ? '; most days in one other country: ' + top[0] + ' ' + top[1] + ' (must stay 183 or under)' : '') + '. Also needs a Cyprus business, job or directorship held to 31 December, and a home in Cyprus.');
     const history = years.map(y => {
       const end = Math.min(yEnd(y), asof), n = inRange(days, yStart(y), end).length, h = nthDay(days, yStart(y), end, 184);
       const tp = otherMax(y);
@@ -2060,7 +2095,8 @@ function computeStats(asof) {
       note: 'Arrival day counts as in Cyprus, the departure day as outside. From 1 Jan 2026 the 60-day rule no longer requires him to be non-resident everywhere else.',
       lines, history, historyHead: 'Year · days in Cyprus', reachedWord: 'over 183',
       resetInfo: 'New count from 1 Jan ' + (asofYear + 1) + '.' });
-    if (profile.cyBusiness && profile.cyHome) { const cyTop = otherMax(asofYear); if (used >= 60 && (!cyTop || cyTop[1] <= 183)) stats[stats.length - 1].lines.unshift('<span class="lim-ok">Meets the 60-day rule: 60+ days, a Cyprus business/job and home, and no other country over 183.</span>'); }
+    if (profile.cyBusiness && profile.cyHome && profile.cyYearEnd !== false) { const cyTop = otherMax(asofYear); if (used >= 60 && (!cyTop || cyTop[1] <= 183)) stats[stats.length - 1].lines.unshift('<span class="lim-ok">Meets the 60-day rule: 60+ days, a Cyprus business/job' + (profile.cyYearEnd === true ? ' held to 31 December' : '') + ' and a home, and no other country over 183.</span>' + (profile.cyYearEnd == null ? ' <i>Check the business/job is still held on 31 December.</i>' : '')); }
+    else if (profile.cyBusiness && profile.cyHome && profile.cyYearEnd === false && used >= 60) stats[stats.length - 1].lines.unshift('<span class="lim-warn">60-day rule not met: the Cyprus business/job ends before 31 December.</span>');
   }
   return applyProfile(stats);
 }
@@ -2333,7 +2369,7 @@ function planImpact(stops) {
     r.uk = [];
     for (let d = start; d <= end; d += DAY_MS) { const t = ukTaxYearRange(d); if (!r.uk.some(x => x.label === t.label)) { const ua = ukAssess(t.label, pm); r.uk.push({ label: t.label, used: ua.days, lim: ua.limit, hit: ua.hit, hit183: ua.hit183 }); } }
     // calendar-year rules
-    const it = countedDays(pm, c => c === 'Italy', 'anyPart'), cy = countedDays(pm, c => c === 'Cyprus', 'cyprus'), us = countedDays(pm, c => mapCountryToRegion(c) === 'US', 'anyPart');
+    const it = countedDays(pm, c => c === 'Italy', 'anyPart'), cy = countedDays(pm, c => c === 'Cyprus', 'cyprus'), us = usCountedDays(pm);
     r.italy = years.map(y => { const L = isLeapYear(y) ? 184 : 183; return { y, used: inRange(it, yS(y), yE(y)).length, lim: L, hit: nthDay(it, yS(y), yE(y), L) }; });
     r.cyprus = years.map(y => ({ y, used: inRange(cy, yS(y), yE(y)).length, lim: 184, hit: nthDay(cy, yS(y), yE(y), 184) }));
     r.us = years.map(y => {
@@ -2665,7 +2701,7 @@ function showDayDetailPanel(dateStr) {
       const depLabel = l.depCity || l.from;
       const arrLabel = l.arrCity || l.to;
       html += '<div style="font-size:13px; padding:4px 0; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; gap:6px;">' +
-        '<span>' + l.depDate + ': ' + depLabel + ' \u2192 ' + arrLabel + (l.arrDate !== l.depDate ? ' (arr. ' + l.arrDate + ')' : '') +
+        '<span>' + l.depDate + (l.depTime ? ' ' + l.depTime : '') + ': ' + depLabel + ' \u2192 ' + arrLabel + (l.arrDate !== l.depDate ? ' (arr. ' + l.arrDate + (l.arrTime ? ' ' + l.arrTime : '') + ')' : l.arrTime ? ' (arr. ' + l.arrTime + ')' : '') +
           (l.src ? '<br><span class="hint">&#128196; from ' + escHtml(l.src) + '</span>' : '') + '</span>' +
         '<span><button type="button" class="edit-btn" data-panel-edit-leg="' + l.id + '">edit</button>' +
         '<button type="button" class="del-btn" data-panel-del-leg="' + l.id + '" style="margin-left:4px;">remove</button></span></div>';
@@ -2855,6 +2891,7 @@ function showDayDetailPanel(dateStr) {
       document.getElementById('legTo').value = lg.to;
       document.getElementById('legArrDate').value = lg.arrDate;
       document.getElementById('legArrCity').value = lg.arrCity || '';
+      document.getElementById('legDepTime').value = lg.depTime || ''; document.getElementById('legArrTime').value = lg.arrTime || '';
       document.getElementById('legSubmitBtn').textContent = 'Update flight';
       document.getElementById('legCancelBtn').style.display = 'inline-block';
       document.getElementById('advancedDetails').open = true;
@@ -3602,8 +3639,8 @@ function renderLegTable() {
   sorted.forEach(lg => {
     const tr = document.createElement('tr');
     tr.setAttribute('data-leg-row', lg.id);
-    tr.innerHTML = '<td>' + lg.depDate + '</td><td>' + lg.from + '</td><td>' + (lg.depCity || '') + '</td>' +
-      '<td>' + lg.to + '</td><td>' + lg.arrDate + '</td><td>' + (lg.arrCity || '') + '</td>' +
+    tr.innerHTML = '<td>' + lg.depDate + (lg.depTime ? ' ' + lg.depTime : '') + '</td><td>' + lg.from + '</td><td>' + (lg.depCity || '') + '</td>' +
+      '<td>' + lg.to + '</td><td>' + lg.arrDate + (lg.arrTime ? ' ' + lg.arrTime : '') + '</td><td>' + (lg.arrCity || '') + '</td>' +
       '<td><button class="edit-btn" data-id="' + lg.id + '">edit</button><button class="del-btn" data-id="' + lg.id + '">remove</button></td>';
     body.appendChild(tr);
   });
@@ -3618,6 +3655,7 @@ function renderLegTable() {
       document.getElementById('legTo').value = lg.to;
       document.getElementById('legArrDate').value = lg.arrDate;
       document.getElementById('legArrCity').value = lg.arrCity || '';
+      document.getElementById('legDepTime').value = lg.depTime || ''; document.getElementById('legArrTime').value = lg.arrTime || '';
       document.getElementById('legSubmitBtn').textContent = 'Update flight';
       document.getElementById('legCancelBtn').style.display = 'inline-block';
       document.getElementById('advancedDetails').open = true; // this form lives inside the collapsed "Advanced" section — open it first, or scrollIntoView has nothing visible to scroll to
@@ -3642,6 +3680,7 @@ function resetLegForm() {
   document.getElementById('legDepCity').value = '';
   document.getElementById('legArrDate').value = '';
   document.getElementById('legArrCity').value = '';
+  document.getElementById('legDepTime').value = ''; document.getElementById('legArrTime').value = '';
   document.getElementById('legSubmitBtn').textContent = 'Add flight';
   document.getElementById('legCancelBtn').style.display = 'none';
 }
@@ -4115,7 +4154,7 @@ async function buildAdviserReport(year, note) {
   }
   // United States: substantial presence test
   {
-    const us = countedDays(pm, region('US'), 'anyPart');
+    const us = usCountedDays(pm);
     const cur = inRange(us, yS, upTo), p1 = inRange(us, Date.UTC(year - 1, 0, 1), Date.UTC(year - 1, 11, 31)).length, p2 = inRange(us, Date.UTC(year - 2, 0, 1), Date.UTC(year - 2, 11, 31)).length;
     const w = cur.length + p1 / 3 + p2 / 6, need = Math.max(31, Math.ceil(183 - p1 / 3 - p2 / 6)), met = cur.length >= 31 && w >= 183;
     rows.push(['United States', 'Calendar year ' + year + ' with ' + (year - 1) + ' and ' + (year - 2), 'Substantial presence: 31+ this year and 183 weighted', cur.length + ' (weighted ' + (Math.floor(w * 10) / 10) + ' = ' + cur.length + ' + ' + p1 + '/3 + ' + p2 + '/6)',
@@ -4598,15 +4637,16 @@ document.getElementById('legForm').addEventListener('submit', async (e) => {
     const to = document.getElementById('legTo').value;
     let arrDate = document.getElementById('legArrDate').value;
     const arrCity = document.getElementById('legArrCity').value;
+    const depTime = document.getElementById('legDepTime').value, arrTime = document.getElementById('legArrTime').value;
     if (!depDate) { statusEl.textContent = 'Departure date is required \u2014 please fill it in.'; statusEl.style.color = 'var(--red)'; return; }
     if (!from || !to) { statusEl.textContent = 'Please choose both a From and a To country.'; statusEl.style.color = 'var(--red)'; return; }
     if (!arrDate) arrDate = depDate;
     if (parseDate(arrDate) < parseDate(depDate)) { statusEl.textContent = 'Arrival date is before departure date.'; statusEl.style.color = 'var(--red)'; return; }
     if (editId) {
       const idx = legs.findIndex(l => l.id === editId);
-      if (idx > -1) legs[idx] = { id: editId, depDate, from, depCity, to, arrDate, arrCity };
+      if (idx > -1) legs[idx] = { ...legs[idx], id: editId, depDate, from, depCity, to, arrDate, arrCity, depTime, arrTime };   // keep the rest (e.g. which file it came from)
     } else {
-      legs.push({ id: uid(), depDate, from, depCity, to, arrDate, arrCity });
+      legs.push({ id: uid(), depDate, from, depCity, to, arrDate, arrCity, depTime, arrTime });
     }
     await saveLegs();
     resetLegForm();
@@ -4984,7 +5024,7 @@ async function cleanupLegacyUndoFields() {
 // A tab left open keeps running the old version after an update is uploaded, so new bills can
 // miss newer features (e.g. a type that didn't exist yet). Every few minutes, and whenever the
 // tab comes back into view, compare this page's version with the one that's live.
-const APP_VERSION = '2026-10-21d';
+const APP_VERSION = '2026-11-11a';
 async function checkForNewerVersion() {
   try {
     const res = await fetch(location.href.split('#')[0], { cache: 'no-store' });
@@ -5110,6 +5150,28 @@ function yearlessDates(text) {
   }
   return out;
 }
+// Clock times in a flight's text: departure and landing (local time at each airport). Boarding,
+// gate-closing and check-in times are skipped, and so are durations ("6h45m").
+function findTimes(text) {
+  const out = [], re = /\b([01]?\d|2[0-3])(?::|h(?=\d))([0-5]\d)(?!\d)\s*([ap]\.?\s?m\b\.?)?/gi;
+  let m;
+  while ((m = re.exec(text))) {
+    const before = text.slice(Math.max(0, m.index - 30), m.index);
+    if (/board|gate|clos|check|desk|open|last|print|issued|generated|duration|flight time|journey|travel time|layover|connection/i.test(before)) continue;
+    if (/^m\b/i.test(text.slice(m.index + m[0].length))) continue;
+    let h = +m[1]; const ap = (m[3] || '').toLowerCase();
+    if (ap.startsWith('p') && h < 12) h += 12; if (ap.startsWith('a') && h === 12) h = 0;
+    out.push({ t: String(h).padStart(2, '0') + ':' + m[2], index: m.index, before });
+  }
+  return out;
+}
+function flightTimes(text) {
+  const ts = findTimes(text);
+  if (!ts.length) return { depTime: '', arrTime: '' };
+  const dep = ts.find(x => /dep|std|leav|takes? off/i.test(x.before)) || ts[0];
+  const arr = ts.find(x => x !== dep && /arr|sta\b|land/i.test(x.before)) || ts.find(x => x.index > dep.index);
+  return { depTime: dep.t, arrTime: arr ? arr.t : '' };
+}
 const AIRPORT_NAMES = { Gatwick: 'LGW', Heathrow: 'LHR', Stansted: 'STN', Luton: 'LTN', 'London City': 'LCY', Ciampino: 'CIA', Fiumicino: 'FCO', Malpensa: 'MXP', Linate: 'LIN', Bergamo: 'BGY',
   Orly: 'ORY', 'Charles de Gaulle': 'CDG', Newark: 'EWR', 'La Guardia': 'LGA', LaGuardia: 'LGA', 'Kennedy': 'JFK', 'Al Maktoum': 'DWC', 'Dubai World Central': 'DWC', 'Abu Dhabi': 'AUH' };
 function parseFlights(lines) {
@@ -5168,7 +5230,8 @@ function parseFlights(lines) {
     seen.add(key);
     const [fromCity, fromCountry] = AIRPORTS[codes[0]], [toCity, toCountry] = AIRPORTS[codes[1]];
     const fno = (text.match(FLIGHT_NO) || [''])[0].replace(/\s+/g, '');
-    flights.push({ kind: 'flight', depDate: dep, arrDate: arr, from: fromCountry, depCity: fromCity, to: toCountry, arrCity: toCity, fromCode: codes[0], toCode: codes[1], flightNo: fno, yearGuessed, raw: block.join(' \u00b7 ').replace(/\s+/g, ' ').slice(0, 220) });
+    const tm = flightTimes(text);
+    flights.push({ kind: 'flight', depDate: dep, arrDate: arr, depTime: tm.depTime, arrTime: tm.arrTime, from: fromCountry, depCity: fromCity, to: toCountry, arrCity: toCity, fromCode: codes[0], toCode: codes[1], flightNo: fno, yearGuessed, raw: block.join(' \u00b7 ').replace(/\s+/g, ' ').slice(0, 220) });
   });
   if (!flights.length) {
     // A boarding pass (often a blurry photo): the flight number or one airport may be unreadable.
@@ -5187,7 +5250,8 @@ function parseFlights(lines) {
       else fromCode = codes[0];
       const al = (text.match(FLIGHT_NO) || [''])[0].replace(/\s+/g, '') || ((text.match(/\b(EK|EY|QR|BA|VS|KL|AF|LH|LX|OS|AZ|IB|TP|SN|SK|AY|EI|TK|CY|FZ|G9|WY|GF|SV|MS|KQ|ET|QF|SQ|CX|MH|TG|PR|AI|UL|AA|UA|DL|AC|U2|FR|W6|VY|LS|DY)\b/) || [''])[0]);
       const A = c => c ? AIRPORTS[c] : ['', ''];
-      flights.push({ kind: 'flight', depDate: dates[0].date, arrDate: dates[0].date, from: A(fromCode)[1], depCity: A(fromCode)[0], to: A(toCode)[1], arrCity: A(toCode)[0],
+      const tm = flightTimes(text);
+      flights.push({ kind: 'flight', depDate: dates[0].date, arrDate: dates[0].date, depTime: tm.depTime, arrTime: tm.arrTime, from: A(fromCode)[1], depCity: A(fromCode)[0], to: A(toCode)[1], arrCity: A(toCode)[0],
         fromCode, toCode, flightNo: al, yearGuessed: yg, partial: !fromCode || !toCode, raw: lines.join(' \u00b7 ').replace(/\s+/g, ' ').slice(0, 220) });
     }
   }
@@ -5403,7 +5467,8 @@ function parseTrains(lines) {
   const later = dates.find(d => d.date > dep && Date.parse(d.date) - Date.parse(dep) <= 2 * 86400000);
   const no = (text.match(/\b(?:train|treno|zug|tren)\s*(?:no\.?|n\.?|number)?\s*(\d{3,5})\b/i) || [])[1];
   const brand = (text.match(/\b(Eurostar|Trenitalia|Frecciarossa|Italo|TGV|Ouigo|SBB|ÖBB|Renfe|Thalys)\b/i) || [])[1] || 'Train';
-  return [{ kind: 'flight', mode: 'train', depDate: dep, arrDate: later ? later.date : dep, from: a.country, depCity: a.city, to: b.country, arrCity: b.city,
+  const tm = flightTimes(text);
+  return [{ kind: 'flight', mode: 'train', depDate: dep, arrDate: later ? later.date : dep, depTime: tm.depTime, arrTime: tm.arrTime, from: a.country, depCity: a.city, to: b.country, arrCity: b.city,
     fromCode: '', toCode: '', flightNo: brand + (no ? ' ' + no : ''), yearGuessed: false, raw: lines.join(' \u00b7 ').replace(/\s+/g, ' ').slice(0, 220) }];
 }
 // lines of text from one PDF -> { flights, hotels }
@@ -6340,7 +6405,7 @@ async function addImportedItems(chosen, isBatch, inBatch) {
   const flights = chosen.filter(it => it.kind === 'flight'), hotels = chosen.filter(it => it.kind === 'hotel');
   flights.forEach(it => {
     it.legId = uid();
-    legs.push({ id: it.legId, depDate: it.depDate, from: it.from, depCity: it.depCity || '', to: it.to, arrDate: it.arrDate || it.depDate, arrCity: it.arrCity || '', src: importSource(it) });
+    legs.push({ id: it.legId, depDate: it.depDate, from: it.from, depCity: it.depCity || '', to: it.to, arrDate: it.arrDate || it.depDate, arrCity: it.arrCity || '', depTime: it.depTime || '', arrTime: it.arrTime || '', src: importSource(it) });
     it.added = true;
   });
   if (flights.length) { await saveLegs(); await buildTripsFromLegs(); }
@@ -6406,7 +6471,7 @@ function showMonthOf(dateStr) {
 }
 function importItemLabel(it) {
   const dd = s => s ? new Date(parseDate(s)).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }) : '?';
-  if (it.kind === 'flight') return (it.mode === 'train' ? '\u{1F686} ' : '\u2708\ufe0f ') + dd(it.depDate) + ' \u00b7 ' + esc(it.flightNo || 'Flight') + ' \u00b7 ' + esc(it.depCity || it.from) + ' (' + esc(it.from) + ') \u2192 ' + esc(it.arrCity || it.to) + ' (' + esc(it.to) + ')' + (it.arrDate && it.arrDate !== it.depDate ? ', arrives ' + dd(it.arrDate) : '');
+  if (it.kind === 'flight') return (it.mode === 'train' ? '\u{1F686} ' : '\u2708\ufe0f ') + dd(it.depDate) + (it.depTime ? ' ' + it.depTime : '') + ' \u00b7 ' + esc(it.flightNo || 'Flight') + ' \u00b7 ' + esc(it.depCity || it.from) + ' (' + esc(it.from) + ') \u2192 ' + esc(it.arrCity || it.to) + ' (' + esc(it.to) + ')' + (it.arrDate && it.arrDate !== it.depDate ? ', arrives ' + dd(it.arrDate) + (it.arrTime ? ' ' + it.arrTime : '') : it.arrTime ? ', arrives ' + it.arrTime : '');
   if (it.kind === 'hotel') return '\u{1F3E8} ' + dd(it.checkIn) + ' \u2192 ' + dd(it.checkOut) + ' \u00b7 ' + esc(it.hotel || 'Hotel') + ' \u00b7 ' + esc(it.city ? it.city + ', ' : '') + esc(it.country);
   return '\u{1F9FE} ' + dd(it.date) + ' \u00b7 ' + esc(it.vendor || 'Bill') + ' \u00b7 ' + esc(it.category) + (it.amount != null && it.amount !== '' ? ' \u00b7 ' + Number(it.amount).toFixed(2) + ' ' + esc(it.currency || '') : '');
 }
@@ -6436,6 +6501,7 @@ async function correctLoggedFlights(items) {
     leg.depDate = it.depDate; leg.arrDate = it.arrDate || it.depDate;
     if (!leg.depCity && it.depCity) leg.depCity = it.depCity;
     if (!leg.arrCity && it.arrCity) leg.arrCity = it.arrCity;
+    if (it.depTime) leg.depTime = it.depTime; if (it.arrTime) leg.arrTime = it.arrTime;
     leg.src = 'dates corrected from ' + importSource(it) + ' (was ' + it.replacedOld.depDate + ')';
     it.legId = leg.id; it.added = true; it.corrected = true;
     if (!importAdded.includes(it)) importAdded.push(it);
