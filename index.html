@@ -5037,7 +5037,7 @@ async function cleanupLegacyUndoFields() {
 // A tab left open keeps running the old version after an update is uploaded, so new bills can
 // miss newer features (e.g. a type that didn't exist yet). Every few minutes, and whenever the
 // tab comes back into view, compare this page's version with the one that's live.
-const APP_VERSION = '2026-11-11d';
+const APP_VERSION = '2026-11-11e';
 async function checkForNewerVersion() {
   try {
     const res = await fetch(location.href.split('#')[0], { cache: 'no-store' });
@@ -5993,6 +5993,24 @@ function partialFlightFromText(lines) {
     if (new RegExp('(>|\u2192|\\bTO\\b|-)\\s*' + codes[0] + '\\b').test(text)) [it.arrCity, it.to] = AIRPORTS[codes[0]];
     else [it.depCity, it.from] = AIRPORTS[codes[0]];
   }
+  // one airport missing: look for a city name printed on the pass ("ROME") and offer it, marked as a guess
+  if ((it.from && !it.to) || (!it.from && it.to)) {
+    const SKIP = new Set(['NICE', 'MALE', 'SPLIT', 'BATH', 'READING', 'MOBILE', 'GATE', 'BEST', 'ORANGE', 'SALE']);
+    const escRe = t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const known = it.depCity || it.arrCity, knownCountry = it.from || it.to;
+    const hits = [];
+    Object.values(AIRPORTS).forEach(([city, country]) => {
+      if (!city || city.length < 4 || SKIP.has(city.toUpperCase()) || city === known || hits.some(h => h.city === city)) return;
+      const m = new RegExp('\\b(' + escRe(city.toUpperCase()) + '|' + escRe(city) + ')\\b').exec(text);
+      if (m) hits.push({ city, country, i: m.index });
+    });
+    const pick = hits.filter(h => h.country !== knownCountry || h.city !== known).sort((a, b) => a.i - b.i)[0];
+    if (pick) {
+      if (!it.to) { it.arrCity = pick.city; it.to = pick.country; } else { it.depCity = pick.city; it.from = pick.country; }
+      it.guessNote = (it.to === pick.country && it.arrCity === pick.city ? 'Where it went' : 'Where it left from') + ' was read from the word \u201c' + pick.city.toUpperCase() + '\u201d on the pass \u2014 check it.';
+    }
+  }
+  const tm = flightTimes(text); it.depTime = tm.depTime; it.arrTime = tm.arrTime;
   // a flight number only counts here if it has 3+ digits ("GA1" in a blurry photo is noise); else the airline's name
   const fno = (text.match(FLIGHT_NO) || [''])[0].replace(/\s+/g, '');
   const byName = (AIRLINE_WORDS.find(([re]) => re.test(text)) || [, ''])[1];
