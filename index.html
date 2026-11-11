@@ -5035,7 +5035,7 @@ async function cleanupLegacyUndoFields() {
 // A tab left open keeps running the old version after an update is uploaded, so new bills can
 // miss newer features (e.g. a type that didn't exist yet). Every few minutes, and whenever the
 // tab comes back into view, compare this page's version with the one that's live.
-const APP_VERSION = '2026-11-11b';
+const APP_VERSION = '2026-11-11c';
 async function checkForNewerVersion() {
   try {
     const res = await fetch(location.href.split('#')[0], { cache: 'no-store' });
@@ -6363,6 +6363,17 @@ async function readPdfFiles(files) {
   fresh.sort((a, b) => order[a.kind] - order[b.kind]);
   const already = fresh.filter(it => importStatus(it).code === 'already');
   already.forEach(it => { it.discarded = true; });
+  // a flight that's already logged: if the file shows its times and the ledger doesn't have them yet, add them
+  let timesAdded = 0, undoForTimes = false;
+  for (const it of already.filter(i => i.kind === 'flight' && (i.depTime || i.arrTime))) {
+    const leg = legs.find(l => l.depDate === it.depDate && l.from === it.from && l.to === it.to);
+    if (!leg || ((leg.depTime || !it.depTime) && (leg.arrTime || !it.arrTime))) continue;
+    if (!undoForTimes) { await pushUndo(); undoForTimes = true; }
+    if (!leg.depTime && it.depTime) leg.depTime = it.depTime;
+    if (!leg.arrTime && it.arrTime) leg.arrTime = it.arrTime;
+    timesAdded++;
+  }
+  if (timesAdded) { await saveLegs(); renderAll(); }
   const toAdd = [];
   // one at a time (flights in date order), so each check already sees what was just added;
   // one undo step for the whole import
@@ -6383,6 +6394,7 @@ async function readPdfFiles(files) {
   const addedParts = [fo ? fo + ' flight' + (fo > 1 ? 's' : '') : '', tr ? tr + ' train journey' + (tr > 1 ? 's' : '') : '', ho ? ho + ' hotel stay' + (ho > 1 ? 's' : '') : '', bi ? bi + ' bill' + (bi > 1 ? 's' : '') : ''].filter(Boolean);
   lastImportSummary = (toAdd.length ? '<span style="color:var(--green);">✓ Added ' + addedParts.join(', ').replace(/, ([^,]*)$/, ' and $1') + ' to the calendar.</span>' : (!unread.length && !held && !already.length ? 'Nothing new found.' : '')) +
     (already.length ? ' Skipped ' + already.length + ' already in the ledger.' : '') +
+    (timesAdded ? ' <span style="color:var(--green);">✓ Added times to ' + timesAdded + ' flight' + (timesAdded > 1 ? 's' : '') + ' already in the ledger.</span>' : '') +
     (held ? ' <b>' + held + ' need your check below.</b>' : '') +
     (toAdd.length ? ' <button type="button" class="btn-secondary hc-btn" id="pdfImportUndo">Undo this import</button>' : '') +
     (unread.length ? '<div style="margin-top:8px; color:var(--amber);">' + unread.map((u, k) => {
