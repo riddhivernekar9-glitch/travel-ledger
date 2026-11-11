@@ -215,7 +215,15 @@
   body.read-only #pdfImportStep, body.read-only [data-tab~="add"]:not([data-tab~="more"]), body.read-only #tabbar [data-go="add"], body.read-only #homeAddDoc,
   body.read-only .edit-btn, body.read-only .del-btn, body.read-only .undo-tools, body.read-only #importBtn, body.read-only #encryptionBox,
   body.read-only #upgradeAllBtn, body.read-only #backfillHotelBtn, body.read-only .day-note-pencil, body.read-only .day-add-bill, body.read-only .edit-only,
-  body.read-only #dayDetailPanel button:not(#dayDetailClose), body.read-only #dayDetailPanel input, body.read-only #advancedDetails { display: none !important; }
+  body.read-only #dayDetailPanel button:not(#dayDetailClose), body.read-only #dayDetailPanel input, body.read-only .entry-box, body.read-only .entry-head { display: none !important; }
+  .entry-box > summary { cursor: pointer; list-style: none; display: flex; align-items: center; justify-content: space-between; }
+  .entry-box > summary::-webkit-details-marker { display: none; }
+  .entry-box > summary h2 { margin: 0; }
+  .entry-box > summary::after { content: "+"; font-size: 22px; color: var(--accent, var(--ink-soft)); padding-left: 12px; }
+  .entry-box[open] > summary::after { content: "\2212"; }
+  .entry-box[open] > summary { margin-bottom: 12px; }
+  .entry-head { margin: 4px 2px 8px; }
+  .hist-head { font-size: 15px; margin: 18px 0 6px; }
   body.read-only .uk-ties select, body.read-only .uk-ties input, body.read-only .prof-opts select, body.read-only [data-key] > select.mini { pointer-events: none; opacity: 0.65; }
   .undo-tools { margin-left: auto; display: inline-flex; gap: 6px; }
   .tool-btn { font-family: var(--ui); font-size: 13.5px; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--line-strong); background: transparent; color: var(--ink); cursor: pointer; }
@@ -482,8 +490,9 @@
     <div id="pdfImportAdded"></div>
   </div>
 
-  <div class="step" data-tab="add">
-    <h2>Add a bill</h2>
+  <p class="hint entry-head" data-tab="add">Or type it in yourself:</p>
+  <details class="step entry-box" id="billBox" data-tab="add">
+    <summary><h2>Add a bill</h2></summary>
     <p class="hint" style="margin-bottom:14px;">Pick the stay, the type and the date, and add what you have. A bill on its own is enough to show he was there.</p>
     <form class="entry" id="expenseForm">
       <input type="hidden" id="expEditId" value="">
@@ -727,38 +736,11 @@
     </form>
     <div id="expFormStatus" class="hint" style="margin-top:8px;"></div>
 
-    <input type="text" id="expSearch" placeholder="Filter by trip, type, or vendor&hellip;" style="width:100%; font-family:var(--ui); font-size:13px; padding:8px; border:1px solid var(--line-strong); border-radius:2px; background:var(--paper); color:var(--ink); margin:14px 0 12px;">
-    <table class="ledger">
-      <thead><tr><th>Trip</th><th>Type</th><th>Vendor</th><th>Date</th><th>Amount</th><th></th></tr></thead>
-      <tbody id="expenseBody"></tbody>
-    </table>
-  </div>
+  </details>
 
-  <div class="step" data-tab="calendar" id="needsPassStep">
-    <h2>Stays shown by a bill only</h2>
-    <p class="hint">These stays rest on a bill only. Adding the flight or a booking makes them solid.</p>
-    <div id="needsPassList" style="margin-top:10px;"></div>
-  </div>
-
-  <div class="step" data-tab="more">
-    <h2>All stays</h2>
-    <button type="button" id="upgradeAllBtn" class="btn-primary" style="margin-bottom:8px;">Tidy stays using hotel bookings</button>
-    <p class="hint" style="margin-bottom:10px;">Sets exact stays from hotel check-in and check-out dates, and marks any stay with a bill as confirmed.</p>
-    <button type="button" id="backfillHotelBtn" class="btn-secondary" style="margin-bottom:8px;">Only set dates from hotel bookings</button>
-    <p class="hint" style="margin-bottom:10px;">Changes only stays that rest on a bill, never ones backed by a flight.</p>
-    <div id="backfillStatus" class="hint" style="margin-bottom:12px;"></div>
-    <input type="text" id="tripSearch" placeholder="Filter by country, state, or notes&hellip;" style="width:100%; font-family:var(--ui); font-size:13px; padding:8px; border:1px solid var(--line-strong); border-radius:2px; background:var(--paper); color:var(--ink); margin-bottom:12px;">
-    <div id="billMismatchWarnings"></div>
-    <div id="dupWarnings"></div>
-    <p class="hint" style="margin-bottom:8px;">Tap a stay to see its bills.</p>
-    <div id="tripBody"></div>
-  </div>
-
-  <details id="advancedDetails" data-tab="add" style="margin-bottom:20px; border:1px solid var(--line); border-radius:4px; padding:2px 16px;">
-    <summary style="cursor:pointer; padding:14px 0; font-weight:bold; color:var(--ink-soft);">Enter a flight or a stay by hand</summary>
-    <p class="hint" style="margin-bottom:16px;">Usually not needed: uploading a document does this for you.</p>
-  <div class="step">
-    <h2>Enter a flight</h2>
+  <details class="step entry-box" id="flightBox" data-tab="add">
+    <summary><h2>Add a flight</h2></summary>
+    <p class="hint" style="margin-bottom:10px;">Usually not needed: uploading a document does this for you.</p>
     <p class="hint" style="margin-bottom:10px;">Leave the landing date blank if it&rsquo;s the same day. Times are optional, in local time at each airport; they let the US 24-hour transit rule apply and show on the calendar.</p>
     <form class="entry" id="legForm">
       <input type="hidden" id="legEditId" value="">
@@ -803,21 +785,10 @@
     </form>
     <div id="legFormStatus" class="hint" style="margin-top:8px;"></div>
 
-    <table class="ledger" style="margin-top:14px;">
-      <thead><tr><th>Dep. date</th><th>From</th><th>Dep. city</th><th>To</th><th>Arr. date</th><th>Arr. city</th><th></th></tr></thead>
-      <tbody id="legBody"></tbody>
-    </table>
+  </details>
 
-    <div class="backup-row" style="margin-top:14px;">
-      <button type="button" id="buildTripsBtn" class="btn-secondary">Refresh calendar now</button>
-      <span id="buildStatus" class="hint"></span>
-    </div>
-    <p class="hint">The calendar updates by itself whenever a flight is added, changed or removed.</p>
-    <div id="legWarnings"></div>
-  </div>
-
-  <div class="step">
-    <h2>Enter or correct a stay</h2>
+  <details class="step entry-box" id="stayBox" data-tab="add">
+    <summary><h2>Add or correct a stay</h2></summary>
     <form class="entry" id="entryForm">
       <input type="hidden" id="tripEditId" value="">
       <div>
@@ -847,9 +818,47 @@
         <button type="button" id="tripCancelBtn" class="btn-secondary" style="display:none;">Cancel edit</button>
       </div>
     </form>
+  </details>
+
+
+  <div class="step" data-tab="calendar" id="needsPassStep">
+    <h2>Stays shown by a bill only</h2>
+    <p class="hint">These stays rest on a bill only. Adding the flight or a booking makes them solid.</p>
+    <div id="needsPassList" style="margin-top:10px;"></div>
   </div>
 
-  </details>
+  <div class="step" data-tab="more">
+    <h2>All stays</h2>
+    <button type="button" id="upgradeAllBtn" class="btn-primary" style="margin-bottom:8px;">Tidy stays using hotel bookings</button>
+    <p class="hint" style="margin-bottom:10px;">Sets exact stays from hotel check-in and check-out dates, and marks any stay with a bill as confirmed.</p>
+    <button type="button" id="backfillHotelBtn" class="btn-secondary" style="margin-bottom:8px;">Only set dates from hotel bookings</button>
+    <p class="hint" style="margin-bottom:10px;">Changes only stays that rest on a bill, never ones backed by a flight.</p>
+    <div id="backfillStatus" class="hint" style="margin-bottom:12px;"></div>
+    <input type="text" id="tripSearch" placeholder="Filter by country, state, or notes&hellip;" style="width:100%; font-family:var(--ui); font-size:13px; padding:8px; border:1px solid var(--line-strong); border-radius:2px; background:var(--paper); color:var(--ink); margin-bottom:12px;">
+    <div id="billMismatchWarnings"></div>
+    <div id="dupWarnings"></div>
+    <p class="hint" style="margin-bottom:8px;">Tap a stay to see its bills.</p>
+    <div id="tripBody"></div>
+  </div>
+
+  <div class="step" data-tab="add" id="historyStep">
+    <h2>History</h2>
+    <h3 class="hist-head">Bills</h3>
+    <input type="text" id="expSearch" placeholder="Filter by trip, type, or vendor&hellip;" style="width:100%; font-family:var(--ui); font-size:13px; padding:8px; border:1px solid var(--line-strong); border-radius:2px; background:var(--paper); color:var(--ink); margin:14px 0 12px;">
+    <table class="ledger">
+      <thead><tr><th>Trip</th><th>Type</th><th>Vendor</th><th>Date</th><th>Amount</th><th></th></tr></thead>
+      <tbody id="expenseBody"></tbody>
+    </table>
+    <h3 class="hist-head">Flights</h3>
+    <table class="ledger" style="margin-top:14px;">
+      <thead><tr><th>Dep. date</th><th>From</th><th>Dep. city</th><th>To</th><th>Arr. date</th><th>Arr. city</th><th></th></tr></thead>
+      <tbody id="legBody"></tbody>
+    </table>
+
+    <div class="backup-row" style="margin-top:14px;">
+      <button type="button" id="buildTripsBtn" class="btn-secondary">Refresh calendar now</button>
+      <span id="buildStatus" class="hint"></span>
+    </div>
 
   <div class="step" data-tab="more">
     <h2>Adviser report &amp; change log</h2>
@@ -2864,7 +2873,7 @@ function showDayDetailPanel(dateStr) {
       document.getElementById('expCurrency').value = ex.currency || '';
       document.getElementById('expSubmitBtn').textContent = 'Update bill';
       document.getElementById('expCancelBtn').style.display = 'inline-block';
-      document.getElementById('expenseForm').scrollIntoView({ behavior: 'smooth', block: 'center' });
+      revealForm('expenseForm'); document.getElementById('expenseForm').scrollIntoView({ behavior: 'smooth', block: 'center' });
     };
   });
   panel.querySelectorAll('[data-panel-del-bill]').forEach(btn => {
@@ -2894,7 +2903,7 @@ function showDayDetailPanel(dateStr) {
       document.getElementById('legDepTime').value = lg.depTime || ''; document.getElementById('legArrTime').value = lg.arrTime || '';
       document.getElementById('legSubmitBtn').textContent = 'Update flight';
       document.getElementById('legCancelBtn').style.display = 'inline-block';
-      document.getElementById('advancedDetails').open = true;
+      revealForm('legForm');
       document.getElementById('legForm').scrollIntoView({ behavior: 'smooth', block: 'center' });
     };
   });
@@ -2921,13 +2930,13 @@ function showDayDetailPanel(dateStr) {
     else { tripSel.value = '__new__'; document.getElementById('expNewTripEntry').value = dateStr; document.getElementById('expNewTripExit').value = dateStr; }
     updateNewTripFieldVisibility();
     document.getElementById('expDate').value = dateStr;
-    document.getElementById('expenseForm').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    revealForm('expenseForm'); document.getElementById('expenseForm').scrollIntoView({ behavior: 'smooth', block: 'center' });
   };
   document.getElementById('dayDetailAddLeg').onclick = () => {
     closeDayDetailPanel();
     resetLegForm();
     document.getElementById('legDepDate').value = dateStr;
-    document.getElementById('advancedDetails').open = true;
+    revealForm('legForm');
     document.getElementById('legForm').scrollIntoView({ behavior: 'smooth', block: 'center' });
   };
   document.getElementById('dayDetailSearch').onclick = () => {
@@ -2936,8 +2945,10 @@ function showDayDetailPanel(dateStr) {
   };
 }
 
+// the entry forms sit in fold-out boxes on the Add tab: open the right one before showing a form
+function revealForm(id) { const el = document.getElementById(id); const box = el && el.closest('details'); if (box) box.open = true; }
 function jumpToDate(dateStr) {
-  document.getElementById('advancedDetails').open = true; // the flight table lives in the collapsed "Advanced" section — open it first, or its rows aren't visible to scroll/highlight
+  // // the flight table lives in the collapsed "Advanced" section — open it first, or its rows aren't visible to scroll/highlight
   const dayMs = parseDate(dateStr);
   const matchingLegs = legs.filter(l => l.depDate === dateStr || l.arrDate === dateStr);
   const matchingTrips = trips.filter(t => overlapDays(t.entry, t.exit, dayMs, dayMs) > 0);
@@ -3368,7 +3379,7 @@ function renderCalendar() {
       }
       updateNewTripFieldVisibility();
       document.getElementById('expDate').value = dateStr;
-      document.getElementById('expenseForm').scrollIntoView({ behavior: 'smooth', block: 'center' });
+      revealForm('expenseForm'); document.getElementById('expenseForm').scrollIntoView({ behavior: 'smooth', block: 'center' });
     };
     }
     if (trip || tags.length > 0) cell.classList.add('has-entry');
@@ -3557,7 +3568,7 @@ function renderTripCardBody(container, t) {
     document.getElementById('note').value = t.note || '';
     document.getElementById('tripSubmitBtn').textContent = 'Update trip';
     document.getElementById('tripCancelBtn').style.display = 'inline-block';
-    document.getElementById('advancedDetails').open = true; // this form lives inside the collapsed "Advanced" section — open it first, or scrollIntoView has nothing visible to scroll to
+    revealForm('entryForm');
     document.getElementById('entryForm').scrollIntoView({ behavior: 'smooth', block: 'center' });
   };
   container.querySelector('[data-add-bill]').onclick = () => {
@@ -3565,7 +3576,7 @@ function renderTripCardBody(container, t) {
     populateExpTripSelect(t.id);
     document.getElementById('expTrip').value = t.id;
     updateUaeResidenceVisibility();
-    document.getElementById('expenseForm').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    revealForm('expenseForm'); document.getElementById('expenseForm').scrollIntoView({ behavior: 'smooth', block: 'center' });
   };
   container.querySelector('[data-trip-del]').onclick = async () => {
     await pushUndo();
@@ -3598,7 +3609,7 @@ function renderTripCardBody(container, t) {
       document.getElementById('expCurrency').value = ex.currency || '';
       document.getElementById('expSubmitBtn').textContent = 'Update bill';
       document.getElementById('expCancelBtn').style.display = 'inline-block';
-      document.getElementById('expenseForm').scrollIntoView({ behavior: 'smooth', block: 'center' });
+      revealForm('expenseForm'); document.getElementById('expenseForm').scrollIntoView({ behavior: 'smooth', block: 'center' });
     };
   });
   container.querySelectorAll('[data-bill-id].del-btn').forEach(btn => {
@@ -3658,7 +3669,7 @@ function renderLegTable() {
       document.getElementById('legDepTime').value = lg.depTime || ''; document.getElementById('legArrTime').value = lg.arrTime || '';
       document.getElementById('legSubmitBtn').textContent = 'Update flight';
       document.getElementById('legCancelBtn').style.display = 'inline-block';
-      document.getElementById('advancedDetails').open = true; // this form lives inside the collapsed "Advanced" section — open it first, or scrollIntoView has nothing visible to scroll to
+      revealForm('legForm');
       document.getElementById('legForm').scrollIntoView({ behavior: 'smooth', block: 'center' });
     };
   });
@@ -3992,7 +4003,7 @@ function renderExpenseTable() {
       document.getElementById('expCurrency').value = ex.currency || '';
       document.getElementById('expSubmitBtn').textContent = 'Update bill';
       document.getElementById('expCancelBtn').style.display = 'inline-block';
-      document.getElementById('expenseForm').scrollIntoView({ behavior: 'smooth', block: 'center' });
+      revealForm('expenseForm'); document.getElementById('expenseForm').scrollIntoView({ behavior: 'smooth', block: 'center' });
     };
   });
   body.querySelectorAll('.del-btn').forEach(btn => {
@@ -5024,7 +5035,7 @@ async function cleanupLegacyUndoFields() {
 // A tab left open keeps running the old version after an update is uploaded, so new bills can
 // miss newer features (e.g. a type that didn't exist yet). Every few minutes, and whenever the
 // tab comes back into view, compare this page's version with the one that's live.
-const APP_VERSION = '2026-11-11a';
+const APP_VERSION = '2026-11-11b';
 async function checkForNewerVersion() {
   try {
     const res = await fetch(location.href.split('#')[0], { cache: 'no-store' });
